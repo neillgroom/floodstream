@@ -335,6 +335,25 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="Preliminary Report XML — ready for upload"
         )
 
+        # Push to Supabase for dashboard review
+        from db import push_claim
+        from dataclasses import asdict
+        prelim_dict = asdict(prelim)
+        push_claim(
+            fg_number=prelim.adjuster_file_number or "UNKNOWN",
+            insured_name=prelim.insured_name,
+            policy_number=prelim.policy_number,
+            date_of_loss=prelim.date_of_loss,
+            carrier="",
+            report_type="prelim",
+            confidence=1.0,  # Human-entered data
+            xml_data=prelim_dict,
+            xml_output=xml,
+            warnings=[],
+            source="telegram",
+        )
+        await update.message.reply_text("Sent to dashboard for review.")
+
         # Clean up session
         del sessions[user_id]
         return ConversationHandler.END

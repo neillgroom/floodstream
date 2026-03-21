@@ -342,6 +342,28 @@ def _run_pipeline(pdf_path: str) -> dict:
         result["xml"] = xml
         result["success"] = True
 
+        # Push to Supabase for dashboard review
+        from db import push_claim
+        from dataclasses import asdict
+        meta_dict = asdict(meta)
+        # Remove non-serializable fields
+        for key in ("warnings", "confidence", "prior_loss_details"):
+            meta_dict.pop(key, None)
+
+        push_claim(
+            fg_number=meta.adjuster_file_number or "UNKNOWN",
+            insured_name=meta.insured_name,
+            policy_number=meta.policy_number,
+            date_of_loss=meta.date_of_loss,
+            carrier="",
+            report_type="final",
+            confidence=meta.confidence,
+            xml_data=meta_dict,
+            xml_output=xml,
+            warnings=meta.warnings or [],
+            source="telegram",
+        )
+
     except Exception as e:
         result["error"] = f"{type(e).__name__}: {e}"
 
