@@ -1,4 +1,4 @@
-# NFIP Claim Automation
+# FloodStream
 
 Automates NFIP flood insurance claim processing for Fountain Group Adjusters.
 
@@ -34,7 +34,7 @@ Automates NFIP flood insurance claim processing for Fountain Group Adjusters.
 ## Project structure
 
 ```
-nfip-automation/
+floodstream/
 ├── app/
 │   ├── parsers/        # NOL parsers for each format
 │   ├── generators/     # PDF and XML generators
