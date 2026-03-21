@@ -6,9 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 async function extractTextFromPdf(file: File, maxPages: number = 10): Promise<string> {
-  // Dynamic import — pdf.js needs DOM APIs, can't run during SSR
-  const pdfjsLib = await import("pdfjs-dist");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+  // Use the legacy build which bundles the worker inline (no separate fetch needed)
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
