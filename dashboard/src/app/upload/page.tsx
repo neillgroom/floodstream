@@ -1,15 +1,37 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+async function extractTextFromPdf(file: File, maxPages: number = 10): Promise<string> {
+  // Dynamic import — pdf.js needs DOM APIs, can't run during SSR
+  const pdfjsLib = await import("pdfjs-dist");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const pages = Math.min(pdf.numPages, maxPages);
+
+  let text = "";
+  for (let i = 1; i <= pages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item) => ("str" in item ? item.str : ""))
+      .join(" ");
+    text += `\n--- PAGE ${i} ---\n${pageText}\n`;
+  }
+
+  return text;
+}
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [fgNumber, setFgNumber] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [status, setStatus] = useState("");
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -21,13 +43,26 @@ export default function UploadPage() {
     setResult(null);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("fg_number", fgNumber);
+      // Step 1: Extract text client-side (first 10 pages only)
+      setStatus("Reading PDF...");
+      const text = await extractTextFromPdf(file, 10);
 
+      if (text.length < 100) {
+        setResult({ success: false, message: "Could not extract text from PDF. It may be scanned or a photo sheet." });
+        setUploading(false);
+        return;
+      }
+
+      // Step 2: Send just the text to the API (small payload)
+      setStatus("Extracting claim data...");
       const res = await fetch("/api/upload", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          fg_number: fgNumber,
+          filename: file.name,
+        }),
       });
 
       const data = await res.json();
@@ -41,21 +76,22 @@ export default function UploadPage() {
         setFgNumber("");
         if (fileRef.current) fileRef.current.value = "";
       } else {
-        setResult({ success: false, message: data.error || "Upload failed" });
+        setResult({ success: false, message: data.error || "Extraction failed" });
       }
     } catch (err) {
-      setResult({ success: false, message: `Network error: ${err}` });
+      setResult({ success: false, message: `Error: ${err}` });
     }
 
     setUploading(false);
+    setStatus("");
   }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <h2 className="text-xl font-semibold">Upload Final Report PDF</h2>
       <p className="text-sm text-zinc-500">
-        Upload an Xactimate Final Report PDF. FloodStream will extract the data,
-        generate the XML, and add it to the review queue.
+        Upload an Xactimate Final Report PDF. FloodStream reads the first few pages,
+        extracts the data, generates the XML, and adds it to the review queue.
       </p>
 
       <form onSubmit={handleUpload}>
@@ -84,7 +120,7 @@ export default function UploadPage() {
                 className="bg-zinc-950 border-zinc-800 text-zinc-100 file:bg-zinc-800 file:text-zinc-300 file:border-0 file:rounded file:px-3 file:py-1 file:mr-3"
               />
               <p className="text-xs text-zinc-600">
-                Accepts Xactimate Final Report PDFs (with Proof of Loss page)
+                Any size — only the first pages are read (narrative + proof of loss)
               </p>
             </div>
 
@@ -93,7 +129,7 @@ export default function UploadPage() {
               disabled={!file || uploading}
               className="w-full h-12 text-base font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
             >
-              {uploading ? "Extracting & Processing..." : "Upload & Extract"}
+              {uploading ? status || "Processing..." : "Upload & Extract"}
             </Button>
           </CardContent>
         </Card>

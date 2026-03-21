@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+// Allow large PDF uploads (up to 100MB) and extend timeout
+export const maxDuration = 60; // 60 second timeout for extraction
+
 // Anthropic API key for Haiku extraction
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 
@@ -40,26 +43,14 @@ For dollar amounts, return just the number (no $ or commas), e.g. "48602.93".
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File | null;
-    const fgNumber = (formData.get("fg_number") as string) || "";
-
-    if (!file || !file.name.toLowerCase().endsWith(".pdf")) {
-      return NextResponse.json({ error: "Please upload a PDF file" }, { status: 400 });
-    }
-
-    // Read PDF bytes
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    // Extract text using pdf-parse
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse");
-    const pdfData = await pdfParse(buffer);
-    const text = pdfData.text;
+    // Text is extracted client-side (pdf.js) and sent as JSON
+    const body = await request.json();
+    const text = body.text as string;
+    const fgNumber = (body.fg_number as string) || "";
 
     if (!text || text.length < 100) {
       return NextResponse.json(
-        { error: "Could not extract text from PDF. It may be a scanned document or photo sheet." },
+        { error: "No text extracted from PDF. It may be a scanned document or photo sheet." },
         { status: 400 }
       );
     }
