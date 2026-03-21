@@ -124,14 +124,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "FloodStream Bot\n\n"
         "Commands:\n"
         "  /final <name> - Generate Final XML from PDF\n"
+        "  /prelim <FG#> - Guided Preliminary Report\n"
         "  /search <name> - Find PDFs matching a name\n"
         "  /status - Check bot status\n"
+        "  /cancel - Cancel current prelim session\n"
         "  /help - This message\n\n"
         "Examples:\n"
         "  /final BAILEY\n"
-        "  /final DOLPHIN POINTE\n"
+        "  /prelim FG151849\n"
         "  /search HUERTA\n\n"
-        "You can also just send a PDF file directly and I'll process it."
+        "You can also send a PDF file directly for Final XML generation."
     )
 
 
@@ -360,6 +362,10 @@ def main():
     log.info(f"Search paths: {sum(1 for p in PDF_SEARCH_PATHS if os.path.isdir(p))} accessible")
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Prelim conversation handler (must be added BEFORE simple command handlers)
+    from prelim_bot import get_prelim_handlers
+    app.add_handler(get_prelim_handlers())
 
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
