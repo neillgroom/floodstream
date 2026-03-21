@@ -6,8 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 async function extractTextFromPdf(file: File, maxPages: number = 10): Promise<string> {
-  // Use the legacy build which bundles the worker inline (no separate fetch needed)
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjsLib = await import("pdfjs-dist");
+  // Point to the worker from node_modules served as a static asset
+  // Use unpkg as a reliable CDN fallback for the exact installed version
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url
+  ).toString();
 
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
