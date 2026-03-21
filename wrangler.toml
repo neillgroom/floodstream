@@ -1,0 +1,23 @@
+name = "floodstream"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Text modules for knowledge base and widget
+rules = [
+  { type = "Text", globs = ["**/*.txt"], fallthrough = true }
+]
+
+[vars]
+ENVIRONMENT = "production"
+
+[[kv_namespaces]]
+binding = "ECHO_CONVERSATIONS"
+id = "ee98ce6289aa44b3ad376d277b8c4f73"
+
+[[kv_namespaces]]
+binding = "ECHO_RATE_LIMITS"
+id = "0fb78b2d32764ab786843016d57ceab7"
+
+[[kv_namespaces]]
+binding = "ECHO_ANALYTICS"
+id = "d096f0f48c634b8e8d1e3b8306175fb7"
