@@ -1,0 +1,53 @@
+<?xml version="1.0" ?>
+<AdjusterData>
+  <report type="Prelim">
+    <insuredName>BRYAN HURLEY</insuredName>
+    <insuredFirstName/>
+    <policyNumber>37115256152001</policyNumber>
+    <dateOfLoss>20250731</dateOfLoss>
+    <catNo>N/a</catNo>
+    <adjusterFileNumber>FG151849</adjusterFileNumber>
+    <adjusterFCN>0005070169</adjusterFCN>
+    <waterHeightExternal>1.00</waterHeightExternal>
+    <waterHeightInternal>-84.00</waterHeightInternal>
+    <reservesBuilding>10000.00</reservesBuilding>
+    <reservesContent>1000.00</reservesContent>
+    <advancePaymentBuilding>0.00</advancePaymentBuilding>
+    <advancePaymentContents>0.00</advancePaymentContents>
+    <adjusterInitialContactDate>20251014</adjusterInitialContactDate>
+    <adjusterInitialInspectionDate>20251023</adjusterInitialInspectionDate>
+    <coverageBuilding>200000.00</coverageBuilding>
+    <coverageContents>80000.00</coverageContents>
+    <buildingType>MAIN DWELLING</buildingType>
+    <occupancy>OWNER-OCCUPIED (PRINCIPAL RESIDENCE)</occupancy>
+    <residencyType/>
+    <numberOfFloors>2</numberOfFloors>
+    <buildingElevated/>
+    <bldgSplitLevel/>
+    <underConstruction>NO</underConstruction>
+    <foundationType>
+      <piles>
+        <type/>
+      </piles>
+      <piers>
+        <type/>
+      </piers>
+      <walls>
+        <type>BASEMENT</type>
+        <other/>
+      </walls>
+    </foundationType>
+    <contentsType>
+      <type>HOUSEHOLD</type>
+    </contentsType>
+    <cause>ACCUMULATION_OF_RAINFALL_OR_SNOWMELT</cause>
+    <condition_trait/>
+    <controlFailure>NO</controlFailure>
+    <unnaturalCause>NO</unnaturalCause>
+    <enteredDate>07/31/2025 12:00 PM</enteredDate>
+    <recededDate>08/01/2025 00:00 AM</recededDate>
+    <timeWaterRemainedInBuilding2>0 Days 12 Hours 0 Minutes</timeWaterRemainedInBuilding2>
+    <reportDate>20260321</reportDate>
+    <adjusterName>Julio Lopez</adjusterName>
+  </report>
+</AdjusterData>

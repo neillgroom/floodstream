@@ -50,9 +50,23 @@ _env = _load_env()
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _env.get("TELEGRAM_BOT_TOKEN", ""))
 
 # Conversation states
-WAITING_FOR_NOL, ASKING_QUESTIONS, CONFIRM = range(3)
+WAITING_FOR_NOL, ASKING_QUESTIONS, CONFIRM, COLLECTING_PHOTOS = range(4)
 
-# In-progress prelim sessions: {user_id: {prelim_data, nol_data, question_index}}
+# Standard NFIP photo sequence
+PHOTO_SEQUENCE = [
+    "Front of Risk",
+    "Address",
+    "Right Side",
+    "Left Side",
+    "Rear",
+    "Exterior Water Mark",
+    "Interior Water Mark",
+    "Interior Damage 1",
+    "Interior Damage 2",
+    "Interior Damage 3",
+]
+
+# In-progress prelim sessions: {user_id: {prelim_data, nol_data, question_index, photos}}
 sessions = {}
 
 
@@ -319,44 +333,16 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.message.text.strip().lower()
 
     if answer in ("generate", "gen", "go", "yes", "y", "done"):
-        prelim = session["prelim"]
-        xml = build_prelim_xml(prelim)
+        # Start photo collection
+        session["photos"] = []
+        session["photo_index"] = 0
 
-        # Send summary
-        await update.message.reply_text("Generating Prelim XML...")
-
-        # Send XML file
-        xml_bytes = xml.encode("utf-8")
-        filename = f"{prelim.adjuster_file_number or 'PRELIM'}_{prelim.insured_name.replace(' ', '_')}_PRELIM.xml"
-
-        await update.message.reply_document(
-            document=xml_bytes,
-            filename=filename,
-            caption="Preliminary Report XML — ready for upload"
+        await update.message.reply_text(
+            "Data confirmed. Now send photos.\n\n"
+            f"Send photo 1: {PHOTO_SEQUENCE[0]}\n\n"
+            "Or type 'skip' to skip photos, or 'done' when finished."
         )
-
-        # Push to Supabase for dashboard review
-        from db import push_claim
-        from dataclasses import asdict
-        prelim_dict = asdict(prelim)
-        push_claim(
-            fg_number=prelim.adjuster_file_number or "UNKNOWN",
-            insured_name=prelim.insured_name,
-            policy_number=prelim.policy_number,
-            date_of_loss=prelim.date_of_loss,
-            carrier="",
-            report_type="prelim",
-            confidence=1.0,  # Human-entered data
-            xml_data=prelim_dict,
-            xml_output=xml,
-            warnings=[],
-            source="telegram",
-        )
-        await update.message.reply_text("Sent to dashboard for review.")
-
-        # Clean up session
-        del sessions[user_id]
-        return ConversationHandler.END
+        return COLLECTING_PHOTOS
 
     # Try to go back to a specific question by number
     try:
@@ -374,10 +360,168 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRM
 
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle a photo sent during photo collection."""
+    user_id = update.effective_user.id
+    session = sessions.get(user_id)
+    if not session:
+        return ConversationHandler.END
+
+    photo_index = session.get("photo_index", 0)
+    photos = session.get("photos", [])
+
+    # Get the largest photo version
+    photo = update.message.photo[-1]  # Highest resolution
+    caption = update.message.caption or ""
+
+    # Download the photo
+    photo_dir = os.path.join(os.path.dirname(__file__), "photo_temp", str(user_id))
+    os.makedirs(photo_dir, exist_ok=True)
+
+    file = await context.bot.get_file(photo.file_id)
+    photo_path = os.path.join(photo_dir, f"photo_{photo_index + 1:02d}.jpg")
+    await file.download_to_drive(photo_path)
+
+    # Determine label
+    label = caption.upper() if caption else (
+        PHOTO_SEQUENCE[photo_index] if photo_index < len(PHOTO_SEQUENCE) else f"PHOTO {photo_index + 1}"
+    )
+
+    photos.append({
+        "path": photo_path,
+        "label": label,
+        "date_taken": datetime.now().strftime("%m/%d/%Y"),
+        "comment": caption,
+    })
+
+    session["photos"] = photos
+    session["photo_index"] = photo_index + 1
+
+    # Prompt for next photo
+    next_idx = photo_index + 1
+    if next_idx < len(PHOTO_SEQUENCE):
+        await update.message.reply_text(
+            f"Got photo {photo_index + 1}: {label}\n\n"
+            f"Send photo {next_idx + 1}: {PHOTO_SEQUENCE[next_idx]}\n"
+            f"Or type 'done' to finish photos."
+        )
+    else:
+        await update.message.reply_text(
+            f"Got photo {photo_index + 1}: {label}\n\n"
+            f"Send more photos or type 'done' to generate the prelim package."
+        )
+
+    return COLLECTING_PHOTOS
+
+
+async def handle_photo_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages during photo collection (done/skip)."""
+    user_id = update.effective_user.id
+    session = sessions.get(user_id)
+    if not session:
+        return ConversationHandler.END
+
+    answer = update.message.text.strip().lower()
+
+    if answer in ("done", "finish", "generate", "go"):
+        return await _generate_prelim_package(update, context, user_id)
+
+    if answer in ("skip", "s", "no photos"):
+        await update.message.reply_text("Skipping photos — generating with form + FCN card only.")
+        return await _generate_prelim_package(update, context, user_id)
+
+    await update.message.reply_text(
+        "Send a photo, or type 'done' to generate the prelim package."
+    )
+    return COLLECTING_PHOTOS
+
+
+async def _generate_prelim_package(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Generate the full prelim package (PDF + XML) and send it."""
+    session = sessions[user_id]
+    prelim = session["prelim"]
+    photos_data = session.get("photos", [])
+
+    await update.message.reply_text(
+        f"Generating prelim package...\n"
+        f"  Form: 2 pages\n"
+        f"  FCN card: 1 page\n"
+        f"  Photos: {len(photos_data)}"
+    )
+
+    # Build PhotoItems
+    from photo_sheet import PhotoItem
+    photo_items = [
+        PhotoItem(
+            image_path=p["path"],
+            label=p["label"],
+            date_taken=p["date_taken"],
+            comment=p.get("comment", ""),
+        )
+        for p in photos_data
+    ]
+
+    # Generate the full package
+    from prelim_pdf import generate_prelim_package
+    out_dir = os.path.join(os.path.dirname(__file__), "output")
+    result = await asyncio.to_thread(generate_prelim_package, prelim, photo_items, out_dir)
+
+    # Send PDF
+    with open(result["pdf_path"], "rb") as f:
+        pdf_filename = os.path.basename(result["pdf_path"])
+        await update.message.reply_document(
+            document=f,
+            filename=pdf_filename,
+            caption=f"Preliminary Report PDF ({len(photos_data)} photos)"
+        )
+
+    # Send XML
+    xml_bytes = result["xml_string"].encode("utf-8")
+    xml_filename = os.path.basename(result["xml_path"])
+    await update.message.reply_document(
+        document=xml_bytes,
+        filename=xml_filename,
+        caption="Preliminary Report XML"
+    )
+
+    # Push to Supabase
+    from db import push_claim
+    from dataclasses import asdict
+    prelim_dict = asdict(prelim)
+    push_claim(
+        fg_number=prelim.adjuster_file_number or "UNKNOWN",
+        insured_name=prelim.insured_name,
+        policy_number=prelim.policy_number,
+        date_of_loss=prelim.date_of_loss,
+        carrier="",
+        report_type="prelim",
+        confidence=1.0,
+        xml_data=prelim_dict,
+        xml_output=result["xml_string"],
+        warnings=[],
+        source="telegram",
+    )
+    await update.message.reply_text("Sent to dashboard for review.")
+
+    # Clean up temp photos
+    photo_dir = os.path.join(os.path.dirname(__file__), "photo_temp", str(user_id))
+    if os.path.isdir(photo_dir):
+        import shutil
+        shutil.rmtree(photo_dir, ignore_errors=True)
+
+    del sessions[user_id]
+    return ConversationHandler.END
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel the current prelim session."""
     user_id = update.effective_user.id
     if user_id in sessions:
+        # Clean up temp photos
+        photo_dir = os.path.join(os.path.dirname(__file__), "photo_temp", str(user_id))
+        if os.path.isdir(photo_dir):
+            import shutil
+            shutil.rmtree(photo_dir, ignore_errors=True)
         del sessions[user_id]
     await update.message.reply_text("Prelim cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
@@ -416,6 +560,10 @@ def get_prelim_handlers():
         states={
             ASKING_QUESTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_answer)],
             CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_confirm)],
+            COLLECTING_PHOTOS: [
+                MessageHandler(filters.PHOTO, handle_photo),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_photo_text),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
