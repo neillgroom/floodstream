@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>FloodStream Reset</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 20px;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #888;
+    letter-spacing: 0.5px;
+  }
+  #reset-btn {
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    border: 3px solid #333;
+    background: #1a1a1a;
+    color: #ff4444;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.3;
+  }
+  #reset-btn:active {
+    transform: scale(0.95);
+    background: #2a1010;
+    border-color: #ff4444;
+  }
+  #reset-btn.working {
+    border-color: #ff8800;
+    color: #ff8800;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  #reset-btn.done {
+    border-color: #00cc66;
+    color: #00cc66;
+  }
+  #reset-btn.fail {
+    border-color: #ff4444;
+    color: #ff4444;
+    background: #1a0000;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  #status {
+    font-size: 13px;
+    color: #666;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.5;
+    min-height: 60px;
+    white-space: pre-line;
+  }
+  #check-btn {
+    background: none;
+    border: 1px solid #333;
+    color: #666;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #check-btn:active { border-color: #666; color: #999; }
+</style>
+</head>
+<body>
+
+<h1>FLOODSTREAM</h1>
+
+<button id="reset-btn">RESET
+BOT</button>
+
+<div id="status">tap to restart the bot</div>
+
+<button id="check-btn">check status</button>
+
+<script>
+// --- CONFIG ---
+var VM_IP = "198.211.98.177";
+var PORT = 8787;
+var TOKEN = "floodstream-reset-2026";
+var BASE = "http://" + VM_IP + ":" + PORT;
+
+var btn = document.getElementById("reset-btn");
+var status = document.getElementById("status");
+var checkBtn = document.getElementById("check-btn");
+
+var working = false;
+
+function setBtn(text, cls) {
+  btn.textContent = text;
+  btn.className = cls || "";
+}
+
+btn.addEventListener("click", function() {
+  if (working) return;
+  working = true;
+  setBtn("RESETTING...", "working");
+  status.textContent = "stopping bot, clearing session, restarting...";
+
+  fetch(BASE + "/reset", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + TOKEN },
+  })
+  .then(function(res) { return res.json(); })
+  .then(function(data) {
+    if (data.success) {
+      setBtn("DONE", "done");
+      status.textContent = data.output || "bot restarted successfully";
+      setTimeout(function() {
+        setBtn("RESET\nBOT", "");
+        status.textContent = "tap to restart the bot";
+      }, 8000);
+    } else {
+      setBtn("FAILED", "fail");
+      status.textContent = data.output || data.error || "restart failed";
+      setTimeout(function() { setBtn("RESET\nBOT", ""); }, 5000);
+    }
+    working = false;
+  })
+  .catch(function(e) {
+    setBtn("ERROR", "fail");
+    status.textContent = "can't reach VM\n" + e.message;
+    setTimeout(function() { setBtn("RESET\nBOT", ""); }, 5000);
+    working = false;
+  });
+});
+
+checkBtn.addEventListener("click", function() {
+  status.textContent = "checking...";
+  fetch(BASE + "/status", {
+    headers: { "Authorization": "Bearer " + TOKEN },
+  })
+  .then(function(res) { return res.json(); })
+  .then(function(data) {
+    status.textContent = data.output || "no response";
+  })
+  .catch(function(e) {
+    status.textContent = "can't reach VM\n" + e.message;
+  });
+});
+</script>
+
+</body>
+</html>

@@ -30,7 +30,7 @@ if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
 fi
 echo "Installing Python dependencies..."
-"$VENV_DIR/bin/pip" install -q "python-telegram-bot[job-queue]" pdfplumber pymupdf reportlab supabase
+"$VENV_DIR/bin/pip" install -q "python-telegram-bot[job-queue]" pdfplumber pymupdf reportlab supabase httpx
 
 # 3. Check for .env
 if [ ! -f "$REPO_DIR/pipeline/.env" ]; then
@@ -48,13 +48,21 @@ if [ ! -f "$REPO_DIR/pipeline/.env" ]; then
     echo ""
 fi
 
-# 4. Install systemd service
-echo "Installing systemd service..."
+# 4. Open port 8787 for reset server (if ufw is active)
+if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+    echo "Opening port 8787 for reset server..."
+    ufw allow 8787/tcp
+fi
+
+# 5. Install systemd services (bot + reset server)
+echo "Installing systemd services..."
 cp "$REPO_DIR/deploy/floodstream-bot.service" /etc/systemd/system/
+cp "$REPO_DIR/deploy/reset-server.service" /etc/systemd/system/floodstream-reset.service
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
+systemctl enable floodstream-reset
 
-# 5. Start or restart
+# 6. Start or restart bot
 if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "Restarting bot..."
     systemctl restart "$SERVICE_NAME"
@@ -63,7 +71,16 @@ else
     systemctl start "$SERVICE_NAME"
 fi
 
-# 6. Verify
+# 7. Start or restart reset server
+if systemctl is-active --quiet floodstream-reset; then
+    echo "Restarting reset server..."
+    systemctl restart floodstream-reset
+else
+    echo "Starting reset server..."
+    systemctl start floodstream-reset
+fi
+
+# 8. Verify
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo ""
@@ -78,7 +95,7 @@ fi
 
 echo ""
 echo "Useful commands:"
-echo "  systemctl status $SERVICE_NAME    # check status"
-echo "  journalctl -u $SERVICE_NAME -f    # tail logs"
-echo "  systemctl restart $SERVICE_NAME   # restart"
-echo "  systemctl stop $SERVICE_NAME      # stop"
+echo "  systemctl status $SERVICE_NAME          # check status"
+echo "  journalctl -u $SERVICE_NAME -f          # tail logs"
+echo "  bash $REPO_DIR/deploy/restart-bot.sh    # circuit breaker (safe full restart)"
+echo "  bash $REPO_DIR/deploy/bot-status.sh     # quick status check"

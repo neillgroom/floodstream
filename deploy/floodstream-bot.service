@@ -8,10 +8,16 @@ Type=simple
 User=root
 WorkingDirectory=/root/floodstream/pipeline
 ExecStart=/root/floodstream/.venv/bin/python /root/floodstream/pipeline/bot.py
+
+# Restart policy — wait 15s between restarts to let Telegram release the polling session.
+# Old value of 5s caused race conditions where the new instance hit 409 Conflict.
 Restart=always
-RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=10
+RestartSec=15
+
+# Allow more restart attempts before systemd gives up.
+# 20 restarts in 600s (10 min) before stop. Old was 10 in 300s.
+StartLimitIntervalSec=600
+StartLimitBurst=20
 
 # Environment
 EnvironmentFile=/root/floodstream/pipeline/.env
@@ -24,9 +30,12 @@ SyslogIdentifier=floodstream-bot
 # Watchdog — bot must ping within 120s or gets restarted
 WatchdogSec=120
 
-# Safety
+# Safety — kill process group, not just main process (catches orphan threads)
 KillMode=mixed
 TimeoutStopSec=10
+
+# Ensure clean exit — send SIGTERM first, then SIGKILL after TimeoutStopSec
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=multi-user.target

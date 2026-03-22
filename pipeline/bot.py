@@ -16,13 +16,16 @@ import asyncio
 import glob
 import logging
 import os
+import signal
 import sys
 import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from telegram import Update
+from telegram.error import Conflict, NetworkError, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,6 +33,12 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+# --- Fatal error tracking ---
+# 409 Conflict = another instance is polling. This is FATAL — exit so systemd restarts.
+_conflict_count = 0
+_CONFLICT_THRESHOLD = 3  # Exit after 3 consecutive conflicts (not 1 — allow transient blips)
+_OPERATOR_CHAT_ID = None  # Set from env — Neill's Telegram user ID for crash alerts
 
 # Track uptime
 BOT_START_TIME = datetime.now(timezone.utc)
@@ -60,6 +69,10 @@ def _load_env():
 _env = _load_env()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", _env.get("TELEGRAM_BOT_TOKEN", ""))
+
+# Operator chat ID — receives crash/restart alerts
+_op_id = os.environ.get("OPERATOR_CHAT_ID", _env.get("OPERATOR_CHAT_ID", ""))
+_OPERATOR_CHAT_ID = int(_op_id) if _op_id else None
 
 # Whitelisted user IDs (Neill + Julio)
 ALLOWED_USERS = set()
@@ -398,19 +411,51 @@ def _run_pipeline(pdf_path: str) -> dict:
     return result
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Global error handler — logs the error, notifies the user, keeps bot alive."""
-    log.error(f"Unhandled exception: {context.error}", exc_info=context.error)
+async def _alert_operator(bot, message: str):
+    """Send a crash/restart alert to the operator via Telegram."""
+    if not _OPERATOR_CHAT_ID:
+        return
+    try:
+        await bot.send_message(chat_id=_OPERATOR_CHAT_ID, text=f"🚨 FloodStream Bot\n\n{message}")
+    except Exception:
+        log.warning("Could not send operator alert")
 
-    # Try to notify the user so they know something went wrong
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler — exits on fatal errors, recovers from transient ones."""
+    global _conflict_count
+    err = context.error
+
+    # --- FATAL: 409 Conflict = another instance is polling ---
+    if isinstance(err, Conflict):
+        _conflict_count += 1
+        log.error(f"409 Conflict ({_conflict_count}/{_CONFLICT_THRESHOLD}): {err}")
+        if _conflict_count >= _CONFLICT_THRESHOLD:
+            log.critical("FATAL: Repeated 409 Conflict — another instance is running. Exiting for systemd restart.")
+            await _alert_operator(context.bot, "Bot hit 409 Conflict (duplicate instance). Exiting for auto-restart.")
+            # os._exit bypasses cleanup — ensures process ACTUALLY dies so systemd restarts
+            os._exit(1)
+        return
+
+    # Reset conflict counter on any non-conflict error (means polling is working)
+    _conflict_count = 0
+
+    # --- Transient: network errors — log and continue ---
+    if isinstance(err, (NetworkError, TimedOut)):
+        log.warning(f"Network error (will retry): {type(err).__name__}: {err}")
+        return
+
+    # --- Everything else: log, notify user, continue ---
+    log.error(f"Unhandled exception: {err}", exc_info=err)
+
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
                 f"Something went wrong. Try again.\n"
-                f"Error: {type(context.error).__name__}"
+                f"Error: {type(err).__name__}"
             )
         except Exception:
-            pass  # Can't reply — connection issue, etc.
+            pass
 
 
 def _notify_systemd_watchdog():
@@ -438,6 +483,33 @@ async def watchdog_ping(context: ContextTypes.DEFAULT_TYPE):
     _notify_systemd_watchdog()
 
 
+def _clear_stale_session():
+    """
+    Clear any stale Telegram polling session BEFORE starting.
+
+    This prevents the 409 Conflict death spiral:
+    1. Old instance dies but Telegram still thinks it's polling
+    2. New instance starts, tries to poll → 409
+    3. Both are now broken
+
+    Fix: call deleteWebhook (which also clears getUpdates sessions) before polling.
+    """
+    log.info("Clearing stale Telegram sessions...")
+    try:
+        resp = httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook",
+            json={"drop_pending_updates": True},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            log.info("Stale session cleared successfully")
+        else:
+            log.warning(f"deleteWebhook response: {data}")
+    except Exception as e:
+        log.warning(f"Could not clear stale session (will try anyway): {e}")
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set")
@@ -450,10 +522,14 @@ def main():
     log.info(f"AI validation: {'enabled' if ANTHROPIC_API_KEY else 'disabled (no API key)'}")
     log.info(f"Whitelist: {ALLOWED_USERS or 'disabled (dev mode)'}")
     log.info(f"Search paths: {sum(1 for p in PDF_SEARCH_PATHS if os.path.isdir(p))} accessible")
+    log.info(f"Operator alerts: {'enabled' if _OPERATOR_CHAT_ID else 'disabled (set OPERATOR_CHAT_ID)'}")
+
+    # CRITICAL: Clear any stale polling session before starting
+    _clear_stale_session()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Global error handler — prevents unhandled exceptions from killing the bot
+    # Global error handler — exits on fatal errors, recovers from transient ones
     app.add_error_handler(error_handler)
 
     # Prelim conversation handler (must be added BEFORE simple command handlers)
@@ -475,6 +551,22 @@ def main():
 
     # Notify systemd we're ready
     _notify_systemd_watchdog()
+
+    # Send startup alert to operator
+    if _OPERATOR_CHAT_ID:
+        try:
+            import asyncio as _aio
+            async def _send_startup():
+                from telegram import Bot
+                bot = Bot(token=TELEGRAM_BOT_TOKEN)
+                async with bot:
+                    await bot.send_message(
+                        chat_id=_OPERATOR_CHAT_ID,
+                        text=f"✅ FloodStream Bot started\nTime: {datetime.now(timezone.utc).strftime('%m/%d %I:%M %p UTC')}"
+                    )
+            _aio.run(_send_startup())
+        except Exception as e:
+            log.warning(f"Could not send startup alert: {e}")
 
     log.info("Bot is running. Press Ctrl+C to stop.")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

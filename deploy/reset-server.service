@@ -1,0 +1,27 @@
+[Unit]
+Description=FloodStream Reset Server (circuit breaker endpoint)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/floodstream/deploy
+ExecStart=/usr/bin/python3 /root/floodstream/deploy/reset-server.py
+
+# This service must be MORE resilient than the bot — it's the thing that fixes the bot.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=600
+StartLimitBurst=50
+
+# Environment — just the reset token
+Environment=RESET_TOKEN=floodstream-reset-2026
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=floodstream-reset
+
+[Install]
+WantedBy=multi-user.target
