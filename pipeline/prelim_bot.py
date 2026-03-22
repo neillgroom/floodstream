@@ -205,11 +205,22 @@ async def cmd_prelim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prelim.coverage_building = nol_data.building_coverage
     prelim.coverage_contents = nol_data.contents_coverage
 
-    # Start session
+    # Build property address string from NOL fields
+    property_csz = ", ".join(filter(None, [
+        nol_data.property_city,
+        nol_data.property_state,
+        nol_data.property_zip,
+    ]))
+
+    # Start session — include carrier/property info for photo sheet header
     sessions[user_id] = {
         "prelim": prelim,
         "nol": nol_data,
         "question_index": 0,
+        "carrier_name": nol_data.carrier or "",
+        "claim_number": nol_data.claim_number or "",
+        "property_address": nol_data.property_address or "",
+        "property_csz": property_csz,
     }
 
     # Ask the first question
@@ -470,10 +481,16 @@ async def _generate_prelim_package(update: Update, context: ContextTypes.DEFAULT
         for p in photos_data
     ]
 
-    # Generate the full package
+    # Generate the full package — pass carrier/property info for photo sheet header
     from prelim_pdf import generate_prelim_package
     out_dir = os.path.join(os.path.dirname(__file__), "output")
-    result = await asyncio.to_thread(generate_prelim_package, prelim, photo_items, out_dir)
+    result = await asyncio.to_thread(
+        generate_prelim_package, prelim, photo_items, out_dir,
+        carrier_name=session.get("carrier_name", ""),
+        claim_number=session.get("claim_number", ""),
+        property_address=session.get("property_address", ""),
+        property_csz=session.get("property_csz", ""),
+    )
 
     # Send PDF
     with open(result["pdf_path"], "rb") as f:
@@ -502,7 +519,7 @@ async def _generate_prelim_package(update: Update, context: ContextTypes.DEFAULT
         insured_name=prelim.insured_name,
         policy_number=prelim.policy_number,
         date_of_loss=prelim.date_of_loss,
-        carrier="",
+        carrier=session.get("carrier_name", ""),
         report_type="prelim",
         confidence=1.0,
         xml_data=prelim_dict,
