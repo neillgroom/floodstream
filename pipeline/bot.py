@@ -468,7 +468,10 @@ def main():
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
 
     # Systemd watchdog — ping every 30s (service expects response within 120s)
-    app.job_queue.run_repeating(watchdog_ping, interval=30, first=5)
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(watchdog_ping, interval=30, first=5)
+    else:
+        log.warning("JobQueue not available — install python-telegram-bot[job-queue] for watchdog support")
 
     # Notify systemd we're ready
     _notify_systemd_watchdog()

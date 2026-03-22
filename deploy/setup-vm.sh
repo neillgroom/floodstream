@@ -30,7 +30,7 @@ if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
 fi
 echo "Installing Python dependencies..."
-"$VENV_DIR/bin/pip" install -q python-telegram-bot pdfplumber pymupdf reportlab supabase
+"$VENV_DIR/bin/pip" install -q "python-telegram-bot[job-queue]" pdfplumber pymupdf reportlab supabase
 
 # 3. Check for .env
 if [ ! -f "$REPO_DIR/pipeline/.env" ]; then
