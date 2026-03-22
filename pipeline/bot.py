@@ -18,6 +18,8 @@ import logging
 import os
 import sys
 import tempfile
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from telegram import Update
@@ -28,6 +30,9 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+
+# Track uptime
+BOT_START_TIME = datetime.now(timezone.utc)
 
 # Add pipeline directory to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -138,7 +143,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check bot status."""
+    """Check bot status — includes uptime and system health."""
     if not is_authorized(update):
         await update.message.reply_text("Not authorized.")
         return
@@ -146,11 +151,34 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ai_status = "Ready" if ANTHROPIC_API_KEY else "No API key (regex-only mode)"
     paths_available = sum(1 for p in PDF_SEARCH_PATHS if os.path.isdir(p))
 
+    # Calculate uptime
+    now = datetime.now(timezone.utc)
+    uptime = now - BOT_START_TIME
+    days = uptime.days
+    hours, remainder = divmod(uptime.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if days > 0:
+        uptime_str = f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        uptime_str = f"{hours}h {minutes}m"
+    else:
+        uptime_str = f"{minutes}m"
+
+    # Check Dropbox sync
+    dropbox_ok = any(os.path.isdir(p) for p in PDF_SEARCH_PATHS)
+
+    # Check active prelim sessions
+    from prelim_bot import sessions as prelim_sessions
+    active_prelims = len(prelim_sessions)
+
     await update.message.reply_text(
-        f"FloodStream Bot Status\n\n"
-        f"AI Validation: {ai_status}\n"
+        f"FloodStream Bot — ALL GOOD\n\n"
+        f"Uptime: {uptime_str}\n"
+        f"AI: {ai_status}\n"
+        f"Dropbox: {'connected' if dropbox_ok else 'NOT FOUND'}\n"
         f"Search paths: {paths_available} accessible\n"
-        f"Your user ID: {update.effective_user.id}"
+        f"Active prelims: {active_prelims}\n"
+        f"Started: {BOT_START_TIME.strftime('%m/%d %I:%M %p UTC')}"
     )
 
 
@@ -370,6 +398,46 @@ def _run_pipeline(pdf_path: str) -> dict:
     return result
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler — logs the error, notifies the user, keeps bot alive."""
+    log.error(f"Unhandled exception: {context.error}", exc_info=context.error)
+
+    # Try to notify the user so they know something went wrong
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                f"Something went wrong. Try again.\n"
+                f"Error: {type(context.error).__name__}"
+            )
+        except Exception:
+            pass  # Can't reply — connection issue, etc.
+
+
+def _notify_systemd_watchdog():
+    """Ping systemd watchdog if running under systemd."""
+    try:
+        notify_socket = os.environ.get("NOTIFY_SOCKET")
+        if not notify_socket:
+            return
+
+        import socket
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            if notify_socket.startswith("@"):
+                notify_socket = "\0" + notify_socket[1:]
+            sock.connect(notify_socket)
+            sock.sendall(b"WATCHDOG=1")
+        finally:
+            sock.close()
+    except Exception:
+        pass
+
+
+async def watchdog_ping(context: ContextTypes.DEFAULT_TYPE):
+    """Periodic watchdog ping — tells systemd we're alive."""
+    _notify_systemd_watchdog()
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set")
@@ -385,6 +453,9 @@ def main():
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Global error handler — prevents unhandled exceptions from killing the bot
+    app.add_error_handler(error_handler)
+
     # Prelim conversation handler (must be added BEFORE simple command handlers)
     from prelim_bot import get_prelim_handlers
     app.add_handler(get_prelim_handlers())
@@ -396,8 +467,14 @@ def main():
     app.add_handler(CommandHandler("final", cmd_final))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
 
+    # Systemd watchdog — ping every 30s (service expects response within 120s)
+    app.job_queue.run_repeating(watchdog_ping, interval=30, first=5)
+
+    # Notify systemd we're ready
+    _notify_systemd_watchdog()
+
     log.info("Bot is running. Press Ctrl+C to stop.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

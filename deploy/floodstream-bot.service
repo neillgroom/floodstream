@@ -1,0 +1,32 @@
+[Unit]
+Description=FloodStream Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/floodstream/pipeline
+ExecStart=/usr/bin/python3 /root/floodstream/pipeline/bot.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Environment
+EnvironmentFile=/root/floodstream/pipeline/.env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=floodstream-bot
+
+# Watchdog — bot must ping within 120s or gets restarted
+WatchdogSec=120
+
+# Safety
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

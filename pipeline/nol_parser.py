@@ -112,21 +112,57 @@ def detect_format(file_path: str) -> str:
     return "unknown"
 
 
-def parse_nol(file_path: str) -> NOLData:
-    """Parse any NOL format and return structured data."""
+def extract_raw_text(file_path: str) -> str:
+    """Extract raw text from a NOL file (XML or PDF) for AI validation."""
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".xml":
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            text = ""
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    text += t + "\n"
+            return text
+    except Exception:
+        return ""
+
+
+def parse_nol(file_path: str, use_ai: bool = True) -> NOLData:
+    """Parse any NOL format and return structured data.
+
+    When use_ai=True and confidence < 100%, runs Haiku/Sonnet
+    validation to fill gaps and correct regex errors.
+    """
     fmt = detect_format(file_path)
 
     if fmt == "wright_xml":
-        return _parse_wright_xml(file_path)
+        data = _parse_wright_xml(file_path)
     elif fmt == "asi_pdf":
-        return _parse_asi_pdf(file_path)
+        data = _parse_asi_pdf(file_path)
     elif fmt == "claim_assignment_pdf":
-        return _parse_claim_assignment_pdf(file_path)
+        data = _parse_claim_assignment_pdf(file_path)
     else:
         data = NOLData(format="unknown")
         data.warnings.append(f"Unknown NOL format for {os.path.basename(file_path)}")
-        # Try generic PDF extraction
-        return _parse_generic_pdf(file_path, data)
+        data = _parse_generic_pdf(file_path, data)
+
+    # Tier 2/3: AI validation when regex didn't get everything
+    if use_ai and data.confidence < 1.0:
+        try:
+            from nol_validation import validate_nol_extraction, ANTHROPIC_API_KEY
+            if ANTHROPIC_API_KEY:
+                raw_text = extract_raw_text(file_path)
+                if raw_text:
+                    data = validate_nol_extraction(raw_text, data)
+        except Exception as e:
+            data.warnings.append(f"AI validation failed: {e}")
+
+    return data
 
 
 def _parse_wright_xml(file_path: str) -> NOLData:
@@ -184,7 +220,7 @@ def _parse_wright_xml(file_path: str) -> NOLData:
 
     # Confidence — XML is highly structured
     critical = [data.insured_name, data.policy_number, data.date_of_loss,
-                data.building_coverage]
+                data.building_coverage, data.carrier]
     data.confidence = sum(1 for f in critical if f) / len(critical)
 
     return data

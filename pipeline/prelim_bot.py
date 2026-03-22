@@ -168,17 +168,26 @@ async def cmd_prelim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nol_paths = _find_nol(fg_number)
     if nol_paths:
         nol_path = nol_paths[0]
-        await update.message.reply_text(f"Found NOL: {os.path.basename(nol_path)}\nParsing...")
-        nol_data = parse_nol(nol_path)
-        await update.message.reply_text(
-            f"NOL parsed ({nol_data.confidence:.0%} confidence)\n"
-            f"  Carrier: {nol_data.carrier}\n"
-            f"  Insured: {nol_data.insured_name}\n"
-            f"  Policy: {nol_data.policy_number}\n"
-            f"  DOL: {nol_data.date_of_loss}\n"
-            f"  Bldg coverage: ${nol_data.building_coverage}\n"
-            f"  Cont coverage: ${nol_data.contents_coverage}"
+        await update.message.reply_text(f"Found NOL: {os.path.basename(nol_path)}\nParsing (regex + AI validation)...")
+
+        # Run parse with AI tiers enabled
+        nol_data = parse_nol(nol_path, use_ai=True)
+
+        # Build response — flag any warnings
+        confidence_emoji = "OK" if nol_data.confidence >= 0.9 else "CHECK"
+        msg = (
+            f"NOL parsed ({nol_data.confidence:.0%} confidence) [{confidence_emoji}]\n"
+            f"  Format: {nol_data.format}\n"
+            f"  Carrier: {nol_data.carrier or '(not found)'}\n"
+            f"  Insured: {nol_data.insured_name or '(not found)'}\n"
+            f"  Policy: {nol_data.policy_number or '(not found)'}\n"
+            f"  DOL: {nol_data.date_of_loss or '(not found)'}\n"
+            f"  Bldg coverage: ${nol_data.building_coverage or '0'}\n"
+            f"  Cont coverage: ${nol_data.contents_coverage or '0'}"
         )
+        if nol_data.warnings:
+            msg += "\n\nWarnings:\n" + "\n".join(f"  - {w}" for w in nol_data.warnings)
+        await update.message.reply_text(msg)
     else:
         await update.message.reply_text(
             f"No NOL found for {fg_number}. You can send the NOL file, "
