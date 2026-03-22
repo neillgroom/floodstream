@@ -4,7 +4,7 @@ Prelim PDF Assembler for FloodStream.
 Assembles the complete Preliminary Report PDF stack:
   1. FEMA Adjuster's Preliminary Report form (2 pages)
   2. FCN card (1 page)
-  3. Photo sheets (2 photos per page)
+  3. Photo sheets (1 photo per page, FG header with logo)
 
 Also generates the Prelim XML simultaneously.
 
@@ -37,6 +37,11 @@ def generate_prelim_package(
     prelim: PrelimData,
     photos: list[PhotoItem],
     output_dir: str,
+    carrier_address: str = "",
+    carrier_name: str = "",
+    claim_number: str = "",
+    property_address: str = "",
+    property_csz: str = "",
 ) -> dict:
     """
     Generate the complete prelim package: PDF + XML.
@@ -45,6 +50,11 @@ def generate_prelim_package(
         prelim: Populated PrelimData with all fields
         photos: List of PhotoItems for the photo sheet
         output_dir: Directory to write output files
+        carrier_address: Carrier mailing address (from NOL, multi-line)
+        carrier_name: Carrier name (from NOL, e.g. "NFIP Direct")
+        claim_number: Claim number (from NOL)
+        property_address: Property street address (from NOL)
+        property_csz: Property city,state,zip (from NOL)
 
     Returns:
         dict with 'pdf_path', 'xml_path', 'xml_string'
@@ -58,13 +68,17 @@ def generate_prelim_package(
     fema_path = os.path.join(output_dir, f"{base}_fema.pdf")
     generate_fema_form(prelim, fema_path)
 
-    # 2. Generate photo sheet
+    # 2. Generate photo sheet with FG header
     claim_info = ClaimInfo(
         insured_name=prelim.insured_name.upper(),
         date_of_report=datetime.now().strftime("%m/%d/%Y"),
+        location=property_address or "",
+        location_csz=property_csz or "",
         date_of_loss=_format_date_display(prelim.date_of_loss),
         policy_number=prelim.policy_number,
-        claim_number="",  # Will be filled from NOL if available
+        company=carrier_name or "",
+        company_address=carrier_address or "",
+        claim_number=claim_number or "",
         fg_file_number=prelim.adjuster_file_number,
         adjuster_name=prelim.adjuster_name,
     )
@@ -141,45 +155,57 @@ if __name__ == "__main__":
     from prelim_schema import PrelimData
 
     prelim = PrelimData(
-        insured_name="BRYAN HURLEY",
-        policy_number="37115256152001",
-        date_of_loss="20250731",
-        adjuster_file_number="FG151849",
+        insured_name="JYL CAPITAL INVESTORS LLC",
+        policy_number="5000025672",
+        date_of_loss="20260223",
+        adjuster_file_number="FG152134",
         water_height_external="1.00",
-        water_height_internal="-84.00",
-        reserves_building="10000.00",
-        reserves_content="1000.00",
-        contact_date="20251014",
-        inspection_date="20251023",
-        coverage_building="200000.00",
-        coverage_contents="80000.00",
+        water_height_internal="-80.00",
+        reserves_building="5000.00",
+        reserves_content="0.00",
+        contact_date="20260310",
+        inspection_date="20260312",
+        coverage_building="225000.00",
+        coverage_contents="0.00",
         building_type="MAIN DWELLING",
-        occupancy="OWNER-OCCUPIED (PRINCIPAL RESIDENCE)",
+        occupancy="TENANT-OCCUPIED",
         number_of_floors="2",
         foundation_type="basement",
         cause="ACCUMULATION_OF_RAINFALL_OR_SNOWMELT",
-        water_entered_date="07/31/2025 12:00 PM",
-        water_receded_date="08/01/2025 00:00 AM",
-        water_duration="0 Days 12 Hours 0 Minutes",
+        water_entered_date="02/23/2026 12:00 PM",
+        water_receded_date="02/24/2026 12:00 PM",
+        water_duration="1 Days 0 Hours 0 Minutes",
     )
 
     # Use FCN card as placeholder photo
     test_photos = [
         PhotoItem(
             image_path=FCN_CARD_PATH,
-            label="FRONT OF RISK",
-            date_taken="10/23/2025",
-            comment="Test photo — front view of property.",
+            label="Front of Risk",
+            date_taken="03/12/2026",
+            comment=(
+                "Risk is a single family, tenant occupied, pre firm, "
+                "non elevated over a basement and located in risk zone AE. "
+                'Ext wm 1". Int wm -80" in the basement. Duration 24 hours. '
+                "Advance payment discussed, however insured will advise later."
+            ),
         ),
         PhotoItem(
             image_path=FCN_CARD_PATH,
-            label="ADDRESS",
-            date_taken="10/23/2025",
+            label="Address",
+            date_taken="03/12/2026",
         ),
     ]
 
     out_dir = os.path.join(os.path.dirname(__file__), "test_output")
-    result = generate_prelim_package(prelim, test_photos, out_dir)
+    result = generate_prelim_package(
+        prelim, test_photos, out_dir,
+        carrier_name="NFIP Direct",
+        carrier_address="6330 SPRING PARKWAY, SUITE 450\nOVERLAND PARK, KS, 66211",
+        claim_number="N999920260107",
+        property_address="811 ELSINORE PL,",
+        property_csz="Chester,PA,19013",
+    )
 
     print(f"PDF: {result['pdf_path']}")
     print(f"XML: {result['xml_path']}")
