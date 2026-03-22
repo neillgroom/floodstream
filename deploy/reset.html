@@ -105,10 +105,9 @@ BOT</button>
 
 <script>
 // --- CONFIG ---
-var VM_IP = "198.211.98.177";
-var PORT = 8787;
+// Works both as a local file (uses absolute URL) and served from the reset server (uses relative)
 var TOKEN = "floodstream-reset-2026";
-var BASE = "http://" + VM_IP + ":" + PORT;
+var BASE = location.protocol === "file:" ? "http://198.211.98.177:8787" : "";
 
 var btn = document.getElementById("reset-btn");
 var status = document.getElementById("status");

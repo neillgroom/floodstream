@@ -20,6 +20,7 @@ RESET_TOKEN = os.environ.get("RESET_TOKEN", "floodstream-reset-2026")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESTART_SCRIPT = os.path.join(SCRIPT_DIR, "restart-bot.sh")
 STATUS_SCRIPT = os.path.join(SCRIPT_DIR, "bot-status.sh")
+HTML_FILE = os.path.join(SCRIPT_DIR, "reset.html")
 
 
 class ResetHandler(http.server.BaseHTTPRequestHandler):
@@ -46,6 +47,18 @@ class ResetHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.path == "/" or self.path == "/index.html":
+            try:
+                with open(HTML_FILE, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(content)
+            except FileNotFoundError:
+                self._json(404, {"error": "reset.html not found"})
+            return
+
         if self.path == "/ping":
             self._json(200, {"status": "ok", "service": "floodstream-reset-server"})
             return
