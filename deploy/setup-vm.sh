@@ -23,10 +23,14 @@ else
     cd "$REPO_DIR"
 fi
 
-# 2. Install Python dependencies
+# 2. Set up Python venv and install dependencies
+VENV_DIR="$REPO_DIR/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Creating Python venv..."
+    python3 -m venv "$VENV_DIR"
+fi
 echo "Installing Python dependencies..."
-pip3 install -q python-telegram-bot pdfplumber pymupdf reportlab supabase 2>/dev/null || \
-pip install -q python-telegram-bot pdfplumber pymupdf reportlab supabase
+"$VENV_DIR/bin/pip" install -q python-telegram-bot pdfplumber pymupdf reportlab supabase
 
 # 3. Check for .env
 if [ ! -f "$REPO_DIR/pipeline/.env" ]; then
