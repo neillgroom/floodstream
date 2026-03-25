@@ -28,44 +28,6 @@
     color: #888;
     letter-spacing: 0.5px;
   }
-  #reset-btn {
-    width: 180px;
-    height: 180px;
-    border-radius: 50%;
-    border: 3px solid #333;
-    background: #1a1a1a;
-    color: #ff4444;
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    -webkit-tap-highlight-color: transparent;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    line-height: 1.3;
-  }
-  #reset-btn:active {
-    transform: scale(0.95);
-    background: #2a1010;
-    border-color: #ff4444;
-  }
-  #reset-btn.working {
-    border-color: #ff8800;
-    color: #ff8800;
-    animation: pulse 1s ease-in-out infinite;
-  }
-  #reset-btn.done {
-    border-color: #00cc66;
-    color: #00cc66;
-  }
-  #reset-btn.fail {
-    border-color: #ff4444;
-    color: #ff4444;
-    background: #1a0000;
-  }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -79,94 +41,174 @@
     min-height: 60px;
     white-space: pre-line;
   }
-  #check-btn {
-    background: none;
-    border: 1px solid #333;
-    color: #666;
-    padding: 8px 20px;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
+  .bots {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
   }
-  #check-btn:active { border-color: #666; color: #999; }
+  .bot-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .bot-label {
+    font-size: 11px;
+    color: #555;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .reset-btn {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    border: 3px solid #333;
+    background: #1a1a1a;
+    color: #ff4444;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .reset-btn:active {
+    transform: scale(0.95);
+    background: #2a1010;
+    border-color: #ff4444;
+  }
+  .reset-btn.working {
+    border-color: #ff8800;
+    color: #ff8800;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  .reset-btn.done {
+    border-color: #00cc66;
+    color: #00cc66;
+  }
+  .reset-btn.fail {
+    border-color: #ff4444;
+    color: #ff4444;
+    background: #1a0000;
+  }
+  .bot-status {
+    font-size: 12px;
+    color: #555;
+    text-align: center;
+    min-height: 16px;
+    letter-spacing: 0.3px;
+  }
+  .bot-status.online { color: #00cc66; }
+  .bot-status.offline { color: #ff4444; }
 </style>
 </head>
 <body>
 
 <h1>FLOODSTREAM</h1>
 
-<button id="reset-btn">RESET
+<div class="bots">
+  <div class="bot-col">
+    <div class="bot-label">Floodstream</div>
+    <button id="reset-btn" class="reset-btn">RESET
 BOT</button>
+    <div id="fs-status" class="bot-status">checking...</div>
+  </div>
+  <div class="bot-col">
+    <div class="bot-label">Telegram</div>
+    <button id="tg-reset-btn" class="reset-btn" style="color:#4488ff;border-color:#224;">RESTART
+BOT</button>
+    <div id="tg-status" class="bot-status">checking...</div>
+  </div>
+</div>
 
-<div id="status">tap to restart the bot</div>
-
-<button id="check-btn">check status</button>
+<div id="status">tap to restart a bot</div>
 
 <script>
-// --- CONFIG ---
-// Works both as a local file (uses absolute URL) and served from the reset server (uses relative)
 var TOKEN = "floodstream-reset-2026";
-var BASE = location.protocol === "file:" ? "http://198.211.98.177:8787" : "";
 
-var btn = document.getElementById("reset-btn");
-var status = document.getElementById("status");
-var checkBtn = document.getElementById("check-btn");
-
-var working = false;
-
-function setBtn(text, cls) {
-  btn.textContent = text;
-  btn.className = cls || "";
+// Auto-detect base URL — works at http://IP:8787/, https://thetower.one/reset/, and file://
+var BASE;
+if (location.protocol === "file:") {
+  BASE = "http://198.211.98.177:8787";
+} else {
+  var path = location.pathname.replace(/\/$/, "").replace(/\/index\.html$/, "");
+  BASE = location.origin + path;
 }
 
-btn.addEventListener("click", function() {
-  if (working) return;
-  working = true;
-  setBtn("RESETTING...", "working");
-  status.textContent = "stopping bot, clearing session, restarting...";
+var actionStatus = document.getElementById("status");
 
-  fetch(BASE + "/reset", {
-    method: "POST",
-    headers: { "Authorization": "Bearer " + TOKEN },
-  })
-  .then(function(res) { return res.json(); })
-  .then(function(data) {
-    if (data.success) {
-      setBtn("DONE", "done");
-      status.textContent = data.output || "bot restarted successfully";
-      setTimeout(function() {
-        setBtn("RESET\nBOT", "");
-        status.textContent = "tap to restart the bot";
-      }, 8000);
-    } else {
-      setBtn("FAILED", "fail");
-      status.textContent = data.output || data.error || "restart failed";
-      setTimeout(function() { setBtn("RESET\nBOT", ""); }, 5000);
-    }
-    working = false;
-  })
-  .catch(function(e) {
-    setBtn("ERROR", "fail");
-    status.textContent = "can't reach VM\n" + e.message;
-    setTimeout(function() { setBtn("RESET\nBOT", ""); }, 5000);
-    working = false;
-  });
-});
+function setIndicator(el, text) {
+  // Check for RUNNING/ONLINE but not if OFFLINE appears later (webhook down)
+  var hasOnline = /RUNNING|ONLINE/i.test(text);
+  var hasOffline = /OFFLINE|DOWN|unreachable/i.test(text);
+  var online = hasOnline && !hasOffline;
+  el.className = "bot-status " + (online ? "online" : "offline");
+  el.textContent = online ? "online" : "offline";
+}
 
-checkBtn.addEventListener("click", function() {
-  status.textContent = "checking...";
-  fetch(BASE + "/status", {
-    headers: { "Authorization": "Bearer " + TOKEN },
-  })
-  .then(function(res) { return res.json(); })
-  .then(function(data) {
-    status.textContent = data.output || "no response";
-  })
-  .catch(function(e) {
-    status.textContent = "can't reach VM\n" + e.message;
+function pollStatus(statusPath, indicatorId) {
+  var el = document.getElementById(indicatorId);
+  fetch(BASE + statusPath, { headers: { "Authorization": "Bearer " + TOKEN } })
+    .then(function(res) { return res.json(); })
+    .then(function(data) { setIndicator(el, data.output || ""); })
+    .catch(function() { el.className = "bot-status offline"; el.textContent = "unreachable"; });
+}
+
+function makeBot(btnId, indicatorId, resetPath, statusPath, idleText) {
+  var btn = document.getElementById(btnId);
+  var working = false;
+  var idleClass = btn.className;
+
+  function setBtn(text, extra) {
+    btn.textContent = text;
+    btn.className = "reset-btn" + (extra ? " " + extra : "");
+  }
+
+  btn.addEventListener("click", function() {
+    if (working) return;
+    working = true;
+    setBtn("RESTARTING...", "working");
+    actionStatus.textContent = "restarting...";
+
+    fetch(BASE + resetPath, { method: "POST", headers: { "Authorization": "Bearer " + TOKEN } })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (data.success) {
+        setBtn("DONE", "done");
+        actionStatus.textContent = "restarted ok";
+        setTimeout(function() {
+          btn.className = idleClass; btn.textContent = idleText;
+          actionStatus.textContent = "";
+          pollStatus(statusPath, indicatorId);
+        }, 5000);
+      } else {
+        setBtn("FAILED", "fail");
+        actionStatus.textContent = data.errors || data.output || data.error || "restart failed";
+        setTimeout(function() { btn.className = idleClass; btn.textContent = idleText; }, 8000);
+      }
+      working = false;
+    })
+    .catch(function(e) {
+      setBtn("ERROR", "fail");
+      actionStatus.textContent = "can't reach VM";
+      setTimeout(function() { btn.className = idleClass; btn.textContent = idleText; }, 5000);
+      working = false;
+    });
   });
-});
+
+  pollStatus(statusPath, indicatorId);
+  setInterval(function() { if (!working) pollStatus(statusPath, indicatorId); }, 30000);
+}
+
+makeBot("reset-btn",    "fs-status", "/reset",          "/status",          "RESET\nBOT");
+makeBot("tg-reset-btn", "tg-status", "/telegram-reset", "/telegram-status", "RESTART\nBOT");
 </script>
 
 </body>

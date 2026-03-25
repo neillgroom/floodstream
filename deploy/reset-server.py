@@ -20,6 +20,8 @@ RESET_TOKEN = os.environ.get("RESET_TOKEN", "floodstream-reset-2026")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESTART_SCRIPT = os.path.join(SCRIPT_DIR, "restart-bot.sh")
 STATUS_SCRIPT = os.path.join(SCRIPT_DIR, "bot-status.sh")
+TELEGRAM_RESTART_SCRIPT = os.path.join(SCRIPT_DIR, "restart-telegram.sh")
+TELEGRAM_STATUS_SCRIPT = os.path.join(SCRIPT_DIR, "telegram-status.sh")
 HTML_FILE = os.path.join(SCRIPT_DIR, "reset.html")
 
 
@@ -77,22 +79,40 @@ class ResetHandler(http.server.BaseHTTPRequestHandler):
                 self._json(500, {"error": str(e)})
             return
 
+        if self.path == "/telegram-status":
+            if not self._auth_ok():
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                result = subprocess.run(
+                    ["bash", TELEGRAM_STATUS_SCRIPT],
+                    capture_output=True, text=True, timeout=10
+                )
+                self._json(200, {"output": result.stdout.strip()})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/reset":
-            self._json(404, {"error": "not found"})
-            return
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         if not self._auth_ok():
             self._json(401, {"error": "unauthorized"})
             return
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if self.path == "/reset":
+            script = RESTART_SCRIPT
+        elif self.path == "/telegram-reset":
+            script = TELEGRAM_RESTART_SCRIPT
+        else:
+            self._json(404, {"error": "not found"})
+            return
 
         try:
             result = subprocess.run(
-                ["bash", RESTART_SCRIPT],
+                ["bash", script],
                 capture_output=True, text=True, timeout=30
             )
             self._json(200, {

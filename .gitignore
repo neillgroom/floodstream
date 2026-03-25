@@ -7,3 +7,4 @@ __pycache__/
 *_generated.xml
 pipeline/bot.log
 pipeline/venue_screenshots/
+.venv/
