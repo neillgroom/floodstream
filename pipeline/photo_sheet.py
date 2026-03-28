@@ -1,410 +1,299 @@
 """
-Photo Sheet Generator for FloodStream Preliminary Reports.
+Photo sheet generator — pixel-identical to accepted Venue submissions.
 
-Generates photo pages matching Fountain Group's Venue format:
-- Header: Bordered box with FG logo, claim info, report info
-- 1 photo per page with Photo ID label, date, taken by, and comment
-- Footer: "Photo Sheet - [page] - [date]"
-- Photos are compressed before embedding (max 1200px, JPEG quality 65)
+Layout per page:
+- Header: FG logo (left) + claim info (center) + dates/IDs (right)
+- 2 photos per page
+- Each photo: image on left (~400pt wide), metadata on right
+- Photo ID label above each photo
+- Standard order: Front of Risk, Address, Left, Right, Rear, Ext WM, Int WM
+- Footer: "Page: X" bottom right
 
-Uses ReportLab for PDF generation.
+All coordinates extracted from actual accepted submission.
 """
 
 import io
 import os
-from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
 
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import inch
-from reportlab.lib.colors import black, Color
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
+import fitz  # PyMuPDF
 from PIL import Image
 
+PAGE_W = 612
+PAGE_H = 842
 
-# Page dimensions
-PAGE_W, PAGE_H = letter  # 612 x 792 points
+# FG logo path
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "fg_logo_extracted.png")
+# Fallback to original logo if extracted doesn't exist
+if not os.path.exists(LOGO_PATH):
+    LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "fg_logo.png")
 
-# Fountain Group info (static)
-FG_NAME = "FOUNTAIN GROUP ADJUSTERS, LLC"
-FG_MAILING = "P.O. BOX 3998"
-FG_CITY_STATE_ZIP = "PINEVILLE, LA 71361"
-FG_PHONE = "(800) 604-9509"
-FG_EMAIL = "CLAIMS@FGCLAIMS.COM"
+# Standard NFIP photo labels in order
+MAX_PHOTO_BYTES = 500 * 1024  # 500KB target per photo
+MAX_PHOTO_DIMENSION = 1200  # max width or height in pixels
 
-# Logo path
-FG_LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "fg_logo.jpg")
 
-# Photo compression settings
-MAX_PHOTO_PX = 1200   # Max dimension (width or height)
-JPEG_QUALITY = 65      # JPEG compression quality
+def _compress_photo(image_path: str) -> bytes:
+    """Compress a photo to ~500KB JPEG. Returns bytes."""
+    img = Image.open(image_path)
 
-# Standard NFIP photo sequence
-STANDARD_PHOTO_LABELS = [
+    # Convert RGBA/palette to RGB
+    if img.mode in ("RGBA", "P", "LA"):
+        img = img.convert("RGB")
+
+    # Resize if larger than max dimension
+    w, h = img.size
+    if max(w, h) > MAX_PHOTO_DIMENSION:
+        ratio = MAX_PHOTO_DIMENSION / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
+    # JPEG compress — start at quality 75, lower if still too big
+    for quality in [75, 60, 45, 30]:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        if buf.tell() <= MAX_PHOTO_BYTES:
+            return buf.getvalue()
+        buf.close()
+
+    # Return whatever we got at lowest quality
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=30, optimize=True)
+    return buf.getvalue()
+
+
+STANDARD_LABELS = [
     "Front of Risk",
     "Address",
-    "Right Side",
-    "Left Side",
+    "Left",
+    "Right",
     "Rear",
-    "Exterior Water Mark",
-    "Interior Water Mark",
-    "Interior Damage 1",
-    "Interior Damage 2",
-    "Interior Damage 3",
+    "Ext WM",
+    "Int WM",
+    "Interior 1",
+    "Interior 2",
+    "Interior 3",
 ]
 
 
 @dataclass
 class PhotoItem:
-    """A single photo for the photo sheet."""
     image_path: str
-    label: str = ""           # e.g. "Front of Risk"
-    date_taken: str = ""      # e.g. "03/12/2026"
+    label: str = ""
+    date_taken: str = ""
     taken_by: str = "Adjuster"
     comment: str = ""
 
 
-@dataclass
-class ClaimInfo:
-    """Claim-level info for the photo sheet header."""
-    insured_name: str = ""
-    date_of_report: str = ""   # MM/DD/YYYY
-    location: str = ""         # Full property address line 1
-    location_csz: str = ""     # City,State,ZIP (e.g. "Chester,PA,19013")
-    date_of_loss: str = ""     # MM/DD/YYYY
-    policy_number: str = ""
-    claim_number: str = ""
-    company: str = ""          # Carrier name (e.g. "NFIP Direct")
-    company_address: str = ""  # Carrier mailing address (multi-line, from NOL)
-    fg_file_number: str = ""
-    adjuster_name: str = "Julio Lopez"
+def _draw_header(page, logo_path, insured_name, location_line1, location_line2,
+                 company, company_addr1, company_addr2,
+                 date_of_report, date_of_loss, policy_number,
+                 claim_number, file_number, adjuster_name):
+    """Draw the photo sheet header — pixel-identical to actual submission."""
+
+    # FG Logo (top left)
+    if os.path.exists(logo_path):
+        logo_rect = fitz.Rect(21, 18, 96, 86)
+        page.insert_image(logo_rect, filename=logo_path)
+
+    # Left column — labels
+    labels_x = 145.4
+    values_x = 211.1
+    y_start = 26
+    y_step = 14
+
+    labels = ["Insured", "LOCATION:", "", "COMPANY:", "", ""]
+    values = [insured_name, location_line1, location_line2,
+              company, company_addr1, company_addr2]
+
+    for i, (label, value) in enumerate(zip(labels, values)):
+        y = y_start + (i * y_step)
+        if label:
+            page.insert_text(fitz.Point(labels_x, y), label,
+                           fontsize=7, fontname="helv", color=(0, 0, 0))
+        if value:
+            page.insert_text(fitz.Point(values_x, y), value,
+                           fontsize=7, fontname="helv", color=(0, 0, 0))
+
+    # Right column — labels and values
+    rlabels_x = 399.2
+    rvalues_x = 510.2
+
+    right_labels = ["DATE OF REPORT:", "DATE OF LOSS:", "POLICY NUMBER:",
+                    "CLAIM NUMBER:", "OUR FILE NUMBER:", "ADJUSTER NAME:"]
+    right_values = [date_of_report, date_of_loss, policy_number,
+                    claim_number, file_number, adjuster_name]
+
+    for i, (label, value) in enumerate(zip(right_labels, right_values)):
+        y = y_start + (i * y_step)
+        page.insert_text(fitz.Point(rlabels_x, y), label,
+                       fontsize=7, fontname="helv", color=(0, 0, 0))
+        page.insert_text(fitz.Point(rvalues_x, y), value,
+                       fontsize=7, fontname="helv", color=(0, 0, 0))
+
+    # Header box — 4 lines forming a rectangle
+    page.draw_line(fitz.Point(18, 15.5), fitz.Point(577, 15.5), color=(0, 0, 0), width=1.0)   # top
+    page.draw_line(fitz.Point(18, 100.5), fitz.Point(577, 100.5), color=(0, 0, 0), width=1.0) # bottom
+    page.draw_line(fitz.Point(18.5, 15.5), fitz.Point(18.5, 100.5), color=(0, 0, 0), width=1.0)  # left
+    page.draw_line(fitz.Point(576.5, 15.5), fitz.Point(576.5, 100.5), color=(0, 0, 0), width=1.0) # right
 
 
-def compress_photo(image_path: str) -> ImageReader:
+def _draw_photo(page, photo: PhotoItem, photo_num: int, slot: int):
     """
-    Compress a photo for PDF embedding.
-    Resizes to max MAX_PHOTO_PX on longest side, JPEG quality JPEG_QUALITY.
-    Returns a ReportLab ImageReader from an in-memory buffer.
+    Draw a photo in the given slot (0 = top, 1 = bottom).
+
+    Top photo: image at y=142, metadata at right
+    Bottom photo: image at y=527, metadata at right
     """
-    img = Image.open(image_path)
+    if slot == 0:
+        label_y = 137
+        img_y0 = 142
+        img_y1 = 442
+        meta_x = 428
+        meta_y = 151
+    else:
+        label_y = 519
+        img_y0 = 527
+        img_y1 = 827
+        meta_x = 438
+        meta_y = 565
 
-    # Convert RGBA/palette to RGB for JPEG
-    if img.mode in ("RGBA", "P", "LA"):
-        img = img.convert("RGB")
+    label_x = 20 if slot == 0 else 18
+    img_x0 = 20 if slot == 0 else 18
+    img_x1 = 420 if slot == 0 else 418
 
-    # Resize if larger than max
-    w, h = img.size
-    if max(w, h) > MAX_PHOTO_PX:
-        if w > h:
-            new_w = MAX_PHOTO_PX
-            new_h = int(h * MAX_PHOTO_PX / w)
+    # Photo ID label above image
+    page.insert_text(fitz.Point(label_x, label_y),
+                    f"Photo ID: {photo.label}",
+                    fontsize=7, fontname="helv", color=(0, 0, 0))
+
+    # Insert compressed photo
+    if os.path.exists(photo.image_path):
+        img_rect = fitz.Rect(img_x0, img_y0, img_x1, img_y1)
+        try:
+            compressed = _compress_photo(photo.image_path)
+            page.insert_image(img_rect, stream=compressed, keep_proportion=True)
+        except Exception:
+            page.draw_rect(img_rect, color=(0.8, 0.8, 0.8), fill=(0.95, 0.95, 0.95))
+            page.insert_text(fitz.Point(img_x0 + 150, img_y0 + 150),
+                           "Photo unavailable", fontsize=10, fontname="helv")
+
+    # Metadata on right side
+    date_str = photo.date_taken or datetime.now().strftime("%m/%d/%Y")
+
+    y_cursor = meta_y
+    for line in [f"Photo ID: {photo_num}", f"Date: {date_str}", f"Taken By: {photo.taken_by}"]:
+        page.insert_text(fitz.Point(meta_x, y_cursor), line,
+                       fontsize=7, fontname="helv", color=(0, 0, 0))
+        y_cursor += 10.5
+
+    # Comment with word wrapping (max ~150pt width = ~43 chars at 7pt Helvetica)
+    comment_text = f"Comment: {photo.comment}" if photo.comment else "Comment:"
+    max_chars = 43
+    words = comment_text.split()
+    current_line = ""
+    for word in words:
+        test = f"{current_line} {word}".strip()
+        if len(test) <= max_chars:
+            current_line = test
         else:
-            new_h = MAX_PHOTO_PX
-            new_w = int(w * MAX_PHOTO_PX / h)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-
-    # Compress to JPEG in memory
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-    buf.seek(0)
-    return ImageReader(buf), img.size
+            page.insert_text(fitz.Point(meta_x, y_cursor), current_line,
+                           fontsize=7, fontname="helv", color=(0, 0, 0))
+            y_cursor += 10.5
+            current_line = word
+    if current_line:
+        page.insert_text(fitz.Point(meta_x, y_cursor), current_line,
+                       fontsize=7, fontname="helv", color=(0, 0, 0))
 
 
-def generate_photo_sheet(
-    claim: ClaimInfo,
+def generate_photo_sheets(
     photos: list[PhotoItem],
     output_path: str,
+    insured_name: str = "",
+    location_line1: str = "",
+    location_line2: str = "",
+    company: str = "",
+    company_addr1: str = "",
+    company_addr2: str = "",
+    date_of_report: str = "",
+    date_of_loss: str = "",
+    policy_number: str = "",
+    claim_number: str = "",
+    file_number: str = "",
+    adjuster_name: str = "Julio Lopez",
 ) -> str:
     """
-    Generate a photo sheet PDF.
+    Generate photo sheet pages — 2 photos per page with claim header.
 
-    Args:
-        claim: Claim-level info for the header
-        photos: List of PhotoItems (1 per page, matching Venue format)
-        output_path: Where to save the PDF
-
-    Returns:
-        The output path
+    Returns path to the generated PDF.
     """
-    c = canvas.Canvas(output_path, pagesize=letter)
-    report_date = claim.date_of_report or datetime.now().strftime("%m/%d/%Y")
+    if not photos:
+        return ""
 
-    for page_idx, photo in enumerate(photos):
-        if page_idx > 0:
-            c.showPage()
+    doc = fitz.open()
 
-        # Draw bordered header with logo
-        header_bottom = _draw_header(c, claim)
+    # Process photos 2 at a time
+    for page_idx in range(0, len(photos), 2):
+        page = doc.new_page(width=PAGE_W, height=PAGE_H)
 
-        # Draw the photo with info panel
-        _draw_photo(c, photo, page_idx + 1, header_bottom)
+        # Draw header on every page
+        _draw_header(
+            page, LOGO_PATH,
+            insured_name, location_line1, location_line2,
+            company, company_addr1, company_addr2,
+            date_of_report, date_of_loss, policy_number,
+            claim_number, file_number, adjuster_name,
+        )
 
-        # Footer
-        _draw_footer(c, page_idx + 1, report_date)
+        # Top photo (slot 0)
+        photo1 = photos[page_idx]
+        _draw_photo(page, photo1, page_idx + 1, slot=0)
 
-    c.save()
+        # Bottom photo (slot 1) if exists
+        if page_idx + 1 < len(photos):
+            photo2 = photos[page_idx + 1]
+            _draw_photo(page, photo2, page_idx + 2, slot=1)
+
+        # Page footer
+        page_num = (page_idx // 2) + 1
+        page.insert_text(fitz.Point(532, 831),
+                        f"Page: {page_num}",
+                        fontsize=7, fontname="helv", color=(0, 0, 0))
+
+    doc.save(output_path)
+    doc.close()
     return output_path
 
 
-def _draw_header(c: canvas.Canvas, claim: ClaimInfo) -> float:
-    """
-    Draw the photo sheet header matching Venue's bordered box layout.
-
-    ┌──────────┬─────────────────────┬──────────────────────┐
-    │  [LOGO]  │ Insured: ...        │ DATE OF REPORT: ...  │
-    │          │ LOCATION: ...       │ DATE OF LOSS: ...    │
-    │          │ COMPANY: ...        │ POLICY NUMBER: ...   │
-    │          │   carrier addr...   │ CLAIM NUMBER: ...    │
-    │          │                     │ OUR FILE NUMBER: ... │
-    │          │                     │ ADJUSTER NAME: ...   │
-    └──────────┴─────────────────────┴──────────────────────┘
-
-    Returns the Y coordinate of the bottom of the header box.
-    """
-    # Box dimensions
-    box_left = 0.4 * inch
-    box_right = PAGE_W - 0.4 * inch
-    box_top = PAGE_H - 0.3 * inch
-    box_height = 1.15 * inch
-    box_bottom = box_top - box_height
-
-    # Draw outer border
-    c.setStrokeColor(black)
-    c.setLineWidth(1)
-    c.rect(box_left, box_bottom, box_right - box_left, box_height)
-
-    # --- Logo (left column, ~1.3" wide) ---
-    logo_col_right = box_left + 1.3 * inch
-    # Vertical divider
-    c.setLineWidth(0.5)
-    c.line(logo_col_right, box_bottom, logo_col_right, box_top)
-
-    if os.path.exists(FG_LOGO_PATH):
-        # Center logo in the left column with padding
-        logo_w = 1.0 * inch
-        logo_h = 0.85 * inch
-        logo_x = box_left + (logo_col_right - box_left - logo_w) / 2
-        logo_y = box_bottom + (box_height - logo_h) / 2
-        try:
-            c.drawImage(
-                FG_LOGO_PATH, logo_x, logo_y, logo_w, logo_h,
-                preserveAspectRatio=True, mask="auto",
-            )
-        except Exception:
-            c.setFont("Helvetica-Bold", 7)
-            c.drawString(box_left + 0.1 * inch, box_bottom + 0.5 * inch, "FOUNTAIN GROUP")
-            c.drawString(box_left + 0.1 * inch, box_bottom + 0.35 * inch, "ADJUSTERS")
-
-    # --- Right info column divider ---
-    right_col_left = box_left + 4.2 * inch
-    c.line(right_col_left, box_bottom, right_col_left, box_top)
-
-    # --- Middle column: Insured, Location, Company ---
-    mid_x = logo_col_right + 0.1 * inch
-    y = box_top - 0.18 * inch
-    line_h = 0.14 * inch
-
-    def mid_field(label, value):
-        nonlocal y
-        c.setFont("Courier-Bold", 7)
-        c.drawString(mid_x, y, label)
-        label_w = c.stringWidth(label, "Courier-Bold", 7)
-        c.setFont("Courier", 7)
-        c.drawString(mid_x + label_w + 4, y, str(value))
-        y -= line_h
-
-    mid_field("Insured", claim.insured_name.upper())
-    mid_field("LOCATION:", claim.location.upper())
-    if claim.location_csz:
-        c.setFont("Courier", 7)
-        c.drawString(mid_x + c.stringWidth("LOCATION:", "Courier-Bold", 7) + 4, y + line_h * 0, "")
-        # Second line of location
-        c.drawString(mid_x + 0.55 * inch, y, claim.location_csz)
-        y -= line_h
-    mid_field("COMPANY:", claim.company.upper())
-    # Carrier address (may be multi-line)
-    if claim.company_address:
-        for addr_line in claim.company_address.split("\n"):
-            c.setFont("Courier", 7)
-            c.drawString(mid_x + 0.55 * inch, y, addr_line.strip().upper())
-            y -= line_h
-
-    # --- Right column: Report details ---
-    rx = right_col_left + 0.08 * inch
-    ry = box_top - 0.18 * inch
-    rv_x = rx + 1.15 * inch  # value column
-
-    def right_field(label, value):
-        nonlocal ry
-        c.setFont("Courier-Bold", 7)
-        c.drawString(rx, ry, label)
-        c.setFont("Courier", 7)
-        c.drawRightString(box_right - 0.1 * inch, ry, str(value))
-        ry -= line_h
-
-    right_field("DATE OF REPORT:", claim.date_of_report)
-    right_field("DATE OF LOSS:", claim.date_of_loss)
-    right_field("POLICY NUMBER:", claim.policy_number)
-    right_field("CLAIM NUMBER:", claim.claim_number)
-    right_field("OUR FILE NUMBER:", claim.fg_file_number)
-    right_field("ADJUSTER NAME:", claim.adjuster_name)
-
-    return box_bottom
-
-
-def _draw_photo(
-    c: canvas.Canvas,
-    photo: PhotoItem,
-    photo_number: int,
-    header_bottom: float,
-):
-    """Draw a single photo with its info panel (1 per page, below header)."""
-
-    # "Photo ID: [label]" title line above the photo
-    label = photo.label or (
-        STANDARD_PHOTO_LABELS[photo_number - 1]
-        if photo_number <= len(STANDARD_PHOTO_LABELS)
-        else f"Photo {photo_number}"
-    )
-    y_title = header_bottom - 0.25 * inch
-    c.setFont("Helvetica", 9)
-    c.setFillColor(black)
-    c.drawString(0.5 * inch, y_title, f"Photo ID: {label}")
-
-    # Photo area (left side) — ~4.2" wide x 3.8" tall
-    photo_x = 0.5 * inch
-    photo_w = 4.2 * inch
-    photo_h = 3.8 * inch
-    photo_y = y_title - 0.15 * inch - photo_h
-
-    # Draw the actual photo
-    if os.path.exists(photo.image_path):
-        try:
-            img_reader, (img_w, img_h) = compress_photo(photo.image_path)
-            aspect = img_w / img_h
-
-            # Fit within the box maintaining aspect ratio
-            if aspect > 1:  # Landscape
-                draw_w = photo_w
-                draw_h = draw_w / aspect
-                if draw_h > photo_h:
-                    draw_h = photo_h
-                    draw_w = draw_h * aspect
-            else:  # Portrait
-                draw_h = photo_h
-                draw_w = draw_h * aspect
-                if draw_w > photo_w:
-                    draw_w = photo_w
-                    draw_h = draw_w / aspect
-
-            # Align top-left
-            draw_x = photo_x
-            draw_y = photo_y + (photo_h - draw_h)
-
-            c.drawImage(
-                img_reader,
-                draw_x, draw_y, draw_w, draw_h,
-                preserveAspectRatio=True,
-            )
-        except Exception as e:
-            # Placeholder if image fails
-            c.setStrokeColor(Color(0.85, 0.85, 0.85))
-            c.setLineWidth(0.5)
-            c.rect(photo_x, photo_y, photo_w, photo_h)
-            c.setFont("Helvetica", 9)
-            c.setFillColor(Color(0.5, 0.5, 0.5))
-            c.drawString(
-                photo_x + 10, photo_y + photo_h / 2,
-                f"[Image: {os.path.basename(photo.image_path)}]",
-            )
-            c.setFillColor(black)
-
-    # --- Info panel (right side) ---
-    info_x = 5.0 * inch
-    info_y = y_title - 0.15 * inch
-
-    c.setFont("Courier-Bold", 8)
-    c.setFillColor(black)
-    c.drawString(info_x, info_y, f"Photo ID: {photo_number}")
-    info_y -= 0.18 * inch
-
-    c.setFont("Courier", 8)
-    c.drawString(info_x, info_y, f"Date: {photo.date_taken}")
-    info_y -= 0.18 * inch
-
-    c.drawString(info_x, info_y, f"Taken By: {photo.taken_by}")
-    info_y -= 0.22 * inch
-
-    # Comment (word wrap in narrow column)
-    if photo.comment:
-        c.setFont("Courier", 7)
-        max_w = PAGE_W - info_x - 0.4 * inch
-        words = photo.comment.split()
-        line = ""
-        for word in words:
-            test = f"{line} {word}".strip()
-            if c.stringWidth(test, "Courier", 7) > max_w:
-                c.drawString(info_x, info_y, line)
-                info_y -= 0.13 * inch
-                line = word
-            else:
-                line = test
-        if line:
-            c.drawString(info_x, info_y, line)
-
-
-def _draw_footer(c: canvas.Canvas, page_num: int, date: str):
-    """Draw the footer line."""
-    y = 0.4 * inch
-    c.setFont("Helvetica-Oblique", 7)
-    c.setFillColor(Color(0.5, 0.5, 0.5))
-    c.drawString(0.5 * inch, y, "Photo Sheet")
-    c.drawCentredString(PAGE_W / 2, y, f"- {page_num} -")
-    c.drawRightString(PAGE_W - 0.5 * inch, y, date)
-    c.setFillColor(black)
-
-
-# --- Quick test ---
+# --- Test ---
 if __name__ == "__main__":
-    import sys
+    test_photos = []
+    logo_path = os.path.join(os.path.dirname(__file__), "assets", "fcn_card.png")
 
-    claim = ClaimInfo(
-        insured_name="JYL CAPITAL INVESTORS LLC",
-        date_of_report="3/13/2026",
-        location="811 ELSINORE PL,",
-        location_csz="Chester,PA,19013",
-        date_of_loss="02/23/2026",
-        policy_number="5000025672",
-        company="NFIP Direct",
-        company_address="6330 SPRING PARKWAY, SUITE 450\nOVERLAND PARK, KS, 66211",
-        claim_number="N999920260107",
-        fg_file_number="FG152134",
-        adjuster_name="Julio Lopez",
-    )
-
-    # Use FCN card as placeholder photo
-    test_img = os.path.join(os.path.dirname(__file__), "assets", "fcn_card.png")
-
-    photos = []
-    for i, label in enumerate(STANDARD_PHOTO_LABELS[:6]):
-        comment = ""
-        if i == 0:
-            comment = (
-                "Risk is a single family, tenant occupied, pre firm, "
-                "non elevated over a basement and located in risk zone AE. "
-                'Ext wm 1". Int wm -80" in the basement. Duration 24 hours. '
-                "Advance payment discussed, however insured will advise later."
-            )
-        photos.append(PhotoItem(
-            image_path=test_img,
+    for i, label in enumerate(STANDARD_LABELS[:7]):
+        test_photos.append(PhotoItem(
+            image_path=logo_path,
             label=label,
-            date_taken="03/12/2026",
+            date_taken="11/08/2024",
             taken_by="Adjuster",
-            comment=comment,
+            comment=f"Test comment for {label}" if i == 0 else "",
         ))
 
-    out = os.path.join(os.path.dirname(__file__), "test_photo_sheet.pdf")
-    generate_photo_sheet(claim, photos, out)
-    print(f"Generated: {out} ({len(photos)} photos, {len(photos)} pages)")
+    out = os.path.join(os.path.dirname(__file__), "test_output", "photo_sheet_test.pdf")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+
+    generate_photo_sheets(
+        test_photos, out,
+        insured_name="HAHNS  KANODE",
+        location_line1="301 S GULF BLVD UNIT 417,",
+        location_line2="PLACIDA,FL,33946",
+        company="First Community Insurance Company",
+        company_addr1="PO Box 33061,",
+        company_addr2="St Peteresburg,FL,33733",
+        date_of_report="11/10/2024",
+        date_of_loss="10/09/2024",
+        policy_number="6820579039",
+        claim_number="567121",
+        file_number="FG149855",
+    )
+    print(f"Generated: {out}")

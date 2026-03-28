@@ -2,20 +2,11 @@
 Prelim PDF Assembler for FloodStream.
 
 Assembles the complete Preliminary Report PDF stack:
-  1. FEMA Adjuster's Preliminary Report form (2 pages)
+  1. FEMA Adjuster's Preliminary Report form (2 pages, template-based)
   2. FCN card (1 page)
-  3. Photo sheets (1 photo per page, FG header with logo)
+  3. Photo sheets (2 photos per page, FG header with box)
 
 Also generates the Prelim XML simultaneously.
-
-Inputs:
-  - PrelimData (from bot or dashboard form)
-  - List of PhotoItems
-  - FCN card image path
-
-Output:
-  - Combined prelim PDF
-  - Prelim XML string
 """
 
 import os
@@ -25,7 +16,7 @@ import fitz  # PyMuPDF for merging PDFs
 
 from prelim_schema import PrelimData
 from prelim_xml_builder import build_prelim_xml
-from photo_sheet import generate_photo_sheet, PhotoItem, ClaimInfo
+from photo_sheet import generate_photo_sheets, PhotoItem
 from fema_form import generate_fema_form
 
 
@@ -46,45 +37,65 @@ def generate_prelim_package(
     """
     Generate the complete prelim package: PDF + XML.
 
-    Args:
-        prelim: Populated PrelimData with all fields
-        photos: List of PhotoItems for the photo sheet
-        output_dir: Directory to write output files
-        carrier_address: Carrier mailing address (from NOL, multi-line)
-        carrier_name: Carrier name (from NOL, e.g. "NFIP Direct")
-        claim_number: Claim number (from NOL)
-        property_address: Property street address (from NOL)
-        property_csz: Property city,state,zip (from NOL)
-
     Returns:
         dict with 'pdf_path', 'xml_path', 'xml_string'
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Base filename
     base = f"{prelim.adjuster_file_number}_{prelim.insured_name.replace(' ', '_')}"
 
-    # 1. Generate FEMA form (pages 1-2)
-    fema_path = os.path.join(output_dir, f"{base}_fema.pdf")
-    generate_fema_form(prelim, fema_path)
+    # Parse property_csz into city, state, zip
+    prop_city = prop_state = prop_zip = ""
+    if property_csz:
+        parts = [p.strip() for p in property_csz.split(",")]
+        if len(parts) >= 1:
+            prop_city = parts[0]
+        if len(parts) >= 2:
+            prop_state = parts[1]
+        if len(parts) >= 3:
+            prop_zip = parts[2]
 
-    # 2. Generate photo sheet with FG header
-    claim_info = ClaimInfo(
-        insured_name=prelim.insured_name.upper(),
-        date_of_report=datetime.now().strftime("%m/%d/%Y"),
-        location=property_address or "",
-        location_csz=property_csz or "",
-        date_of_loss=_format_date_display(prelim.date_of_loss),
-        policy_number=prelim.policy_number,
-        company=carrier_name or "",
-        company_address=carrier_address or "",
-        claim_number=claim_number or "",
-        fg_file_number=prelim.adjuster_file_number,
-        adjuster_name=prelim.adjuster_name,
+    report_date = datetime.now().strftime("%m/%d/%Y")
+    dol_display = _format_date_display(prelim.date_of_loss)
+
+    # Carrier address lines
+    carrier_addr1 = ""
+    carrier_addr2 = ""
+    if carrier_address:
+        lines = carrier_address.split("\n")
+        carrier_addr1 = lines[0] if len(lines) >= 1 else ""
+        carrier_addr2 = lines[1] if len(lines) >= 2 else ""
+
+    # 1. Generate FEMA form (pages 1-2) — template-based, pixel-identical
+    fema_path = os.path.join(output_dir, f"{base}_fema.pdf")
+    generate_fema_form(
+        prelim, fema_path,
+        carrier_name=carrier_name,
+        claim_number=claim_number,
+        property_address=property_address,
+        property_city=prop_city,
+        property_state=prop_state,
+        property_zip=prop_zip,
     )
+
+    # 2. Generate photo sheets (2 per page, FG header with box)
     photo_path = os.path.join(output_dir, f"{base}_photos.pdf")
     if photos:
-        generate_photo_sheet(claim_info, photos, photo_path)
+        generate_photo_sheets(
+            photos, photo_path,
+            insured_name=prelim.insured_name.upper(),
+            location_line1=property_address or "",
+            location_line2=property_csz or "",
+            company=carrier_name or "",
+            company_addr1=carrier_addr1,
+            company_addr2=carrier_addr2,
+            date_of_report=report_date,
+            date_of_loss=dol_display,
+            policy_number=prelim.policy_number,
+            claim_number=claim_number or "",
+            file_number=prelim.adjuster_file_number,
+            adjuster_name=prelim.adjuster_name,
+        )
 
     # 3. Generate FCN card page
     fcn_path = os.path.join(output_dir, f"{base}_fcn.pdf")
@@ -118,11 +129,10 @@ def generate_prelim_package(
 def _create_fcn_page(output_path: str):
     """Create a single-page PDF with the FCN card image centered."""
     doc = fitz.open()
-    page = doc.new_page(width=612, height=792)  # Letter size
+    page = doc.new_page(width=612, height=792)
 
     if os.path.exists(FCN_CARD_PATH):
-        # Center the FCN card image on the page
-        img_rect = fitz.Rect(72, 144, 540, 648)  # Margins: 1" sides, 2" top/bottom
+        img_rect = fitz.Rect(72, 144, 540, 648)
         page.insert_image(img_rect, filename=FCN_CARD_PATH)
 
     doc.save(output_path)
@@ -148,65 +158,3 @@ def _format_date_display(date_str: str) -> str:
     if len(date_str) == 8 and date_str.isdigit():
         return f"{date_str[4:6]}/{date_str[6:8]}/{date_str[:4]}"
     return date_str
-
-
-# --- Quick test ---
-if __name__ == "__main__":
-    from prelim_schema import PrelimData
-
-    prelim = PrelimData(
-        insured_name="JYL CAPITAL INVESTORS LLC",
-        policy_number="5000025672",
-        date_of_loss="20260223",
-        adjuster_file_number="FG152134",
-        water_height_external="1.00",
-        water_height_internal="-80.00",
-        reserves_building="5000.00",
-        reserves_content="0.00",
-        contact_date="20260310",
-        inspection_date="20260312",
-        coverage_building="225000.00",
-        coverage_contents="0.00",
-        building_type="MAIN DWELLING",
-        occupancy="TENANT-OCCUPIED",
-        number_of_floors="2",
-        foundation_type="basement",
-        cause="ACCUMULATION_OF_RAINFALL_OR_SNOWMELT",
-        water_entered_date="02/23/2026 12:00 PM",
-        water_receded_date="02/24/2026 12:00 PM",
-        water_duration="1 Days 0 Hours 0 Minutes",
-    )
-
-    # Use FCN card as placeholder photo
-    test_photos = [
-        PhotoItem(
-            image_path=FCN_CARD_PATH,
-            label="Front of Risk",
-            date_taken="03/12/2026",
-            comment=(
-                "Risk is a single family, tenant occupied, pre firm, "
-                "non elevated over a basement and located in risk zone AE. "
-                'Ext wm 1". Int wm -80" in the basement. Duration 24 hours. '
-                "Advance payment discussed, however insured will advise later."
-            ),
-        ),
-        PhotoItem(
-            image_path=FCN_CARD_PATH,
-            label="Address",
-            date_taken="03/12/2026",
-        ),
-    ]
-
-    out_dir = os.path.join(os.path.dirname(__file__), "test_output")
-    result = generate_prelim_package(
-        prelim, test_photos, out_dir,
-        carrier_name="NFIP Direct",
-        carrier_address="6330 SPRING PARKWAY, SUITE 450\nOVERLAND PARK, KS, 66211",
-        claim_number="N999920260107",
-        property_address="811 ELSINORE PL,",
-        property_csz="Chester,PA,19013",
-    )
-
-    print(f"PDF: {result['pdf_path']}")
-    print(f"XML: {result['xml_path']}")
-    print(f"XML preview:\n{result['xml_string'][:500]}")

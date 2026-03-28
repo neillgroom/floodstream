@@ -93,50 +93,41 @@ class PrelimData:
 
 
 # The questions the bot asks, in order.
+# Fields with a value from defaults.json are skipped.
 # Each tuple: (field_name, question_text, input_type, options_or_hint)
 PRELIM_QUESTIONS = [
-    # Inspection basics
-    ("contact_date", "When did you first contact the insured?", "date",
-     "MM/DD/YYYY"),
-    ("inspection_date", "When was the inspection?", "date",
-     "MM/DD/YYYY"),
-
-    # Water info
-    ("water_height_external", "Exterior water height (inches)?", "number",
+    # Always asked — different every inspection
+    ("water_height_external", "Ext water height (inches)?", "number",
      "Positive number in inches"),
-    ("water_height_internal", "Interior water height (inches)?\n"
-     "(Use negative for basement, e.g. -84 = 7ft below grade)", "number",
+    ("water_height_internal", "Int water height (inches)?\n(-negative = basement)", "number",
      "Positive = above grade, negative = below grade"),
-    ("water_entered_date", "When did water enter the building?", "datetime",
-     "MM/DD/YYYY HH:MM AM (e.g. 07/31/2025 12:00 PM)"),
-    ("water_receded_date", "When did water recede?", "datetime",
-     "MM/DD/YYYY HH:MM AM (e.g. 08/01/2025 12:00 AM)"),
-
-    # Building
-    ("building_type", "Building type?", "choice",
-     BUILDING_TYPES),
-    ("occupancy", "Occupancy?", "choice",
-     OCCUPANCY_TYPES),
-    ("number_of_floors", "Number of floors?", "number",
-     "1, 2, 3, etc."),
-    ("building_elevated", "Is the building elevated?", "yesno", None),
+    ("building_type", "Building type?", "choice", BUILDING_TYPES),
+    ("occupancy", "Occupancy?", "choice", OCCUPANCY_TYPES),
+    ("number_of_floors", "Floors?", "number", "1, 2, 3, etc."),
+    ("building_elevated", "Elevated?", "yesno", None),
     ("split_level", "Split level?", "yesno", None),
-    ("foundation_type", "Foundation type?", "choice",
-     FOUNDATION_TYPES),
+    ("foundation_type", "Foundation?", "choice", FOUNDATION_TYPES),
+    ("reserves_building", "Building reserves ($)?", "dollar", "e.g. 10000"),
+    ("reserves_content", "Contents reserves ($)?", "dollar", "e.g. 1000"),
+    ("contact_date", "Contact date?", "date", "MM/DD/YYYY"),
 
-    # Cause
-    ("cause", "Cause of flooding?", "choice",
-     list(CAUSE_CODES.keys())),
+    # Pre-filled $0, still asked
+    ("advance_payment_building", "Advance building ($)?", "dollar", "0 if none"),
+    ("advance_payment_contents", "Advance contents ($)?", "dollar", "0 if none"),
 
-    # Reserves
-    ("reserves_building", "Building reserves ($)?", "dollar",
-     "Dollar amount, e.g. 10000"),
-    ("reserves_content", "Contents reserves ($)?", "dollar",
-     "Dollar amount, e.g. 1000"),
-
-    # Advance
-    ("advance_payment_building", "Advance payment building ($)?\n(0 if not offered/declined)", "dollar",
-     "0 if none"),
-    ("advance_payment_contents", "Advance payment contents ($)?\n(0 if not offered/declined)", "dollar",
-     "0 if none"),
+    # Defaultable — skipped when set via defaults.json
+    ("cause", "Cause of flooding?", "choice", list(CAUSE_CODES.keys())),
+    ("water_entered_date", "When did water enter?", "datetime",
+     "MM/DD/YYYY HH:MM AM"),
+    ("water_receded_date", "When did water recede?", "datetime",
+     "MM/DD/YYYY HH:MM AM"),
 ]
+
+# Fields that must NEVER be skipped by defaults — always different per inspection
+ALWAYS_ASK = {
+    "water_height_external", "water_height_internal",
+    "building_type", "occupancy", "number_of_floors",
+    "building_elevated", "split_level", "foundation_type",
+    "reserves_building", "reserves_content", "contact_date",
+    "advance_payment_building", "advance_payment_contents",
+}
