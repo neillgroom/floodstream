@@ -15,6 +15,7 @@ Only whitelisted Telegram user IDs can use it.
 import asyncio
 import glob
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -91,7 +92,18 @@ PDF_SEARCH_PATHS = [
     "/root/Dropbox/RT Claims/2025 XACTIMATE FILES/7 Final/BACKUP",
 ]
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+_log_fmt = "%(asctime)s [%(levelname)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=_log_fmt)
+# Also log to a persistent file — survives terminal disconnects
+_log_dir = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_file_handler = logging.handlers.RotatingFileHandler(
+    os.path.join(_log_dir, "floodstream.log"),
+    maxBytes=5 * 1024 * 1024,  # 5MB per file
+    backupCount=10,  # Keep 10 rotated files = 50MB total
+)
+_file_handler.setFormatter(logging.Formatter(_log_fmt))
+logging.getLogger().addHandler(_file_handler)
 log = logging.getLogger("floodstream-bot")
 
 
@@ -141,17 +153,15 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "FloodStream Bot\n\n"
         "Commands:\n"
-        "  /final <name> - Generate Final XML from PDF\n"
-        "  /prelim <FG#> - Guided Preliminary Report\n"
-        "  /search <name> - Find PDFs matching a name\n"
-        "  /status - Check bot status\n"
-        "  /cancel - Cancel current prelim session\n"
-        "  /help - This message\n\n"
-        "Examples:\n"
-        "  /final BAILEY\n"
-        "  /prelim FG151849\n"
-        "  /search HUERTA\n\n"
-        "You can also send a PDF file directly for Final XML generation."
+        "  /prelim <FG#> — Prelim report\n"
+        "  /defaults — Set/view field defaults\n"
+        "  /final <name> — Final XML from PDF\n"
+        "  /search <name> — Find PDFs\n"
+        "  /status — Bot status\n"
+        "  /cancel — Cancel prelim\n\n"
+        "Set event defaults:\n"
+        "  /defaults rainfall, entered 03/15/2026 12:00 PM, receded 03/16/2026 06:00 AM\n\n"
+        "Building info, reserves, water heights always asked."
     )
 
 
@@ -411,6 +421,62 @@ def _run_pipeline(pdf_path: str) -> dict:
     return result
 
 
+async def handle_catchall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catch-all for any text that isn't a command — use Haiku to help."""
+    if not is_authorized(update):
+        await update.message.reply_text("Not authorized.")
+        return
+
+    text = update.message.text.strip()
+    if not text:
+        return
+
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY if ANTHROPIC_API_KEY else "",
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": text}],
+                "system": (
+                    "You are FloodStream Bot, a field assistant for NFIP flood claim adjusters. "
+                    "Keep responses very short (2-3 sentences max). "
+                    "You can ONLY do these things:\n"
+                    "  /prelim FG# — start a prelim report\n"
+                    "  /final NAME — generate final XML from a PDF\n"
+                    "  /search NAME — find PDFs\n"
+                    "  /defaults — set event defaults (cause, water dates)\n"
+                    "  /status — check bot health\n"
+                    "If the user seems to want one of these, point them to the right command. "
+                    "If they're asking a flood claims question, answer briefly from NFIP knowledge. "
+                    "NEVER promise to do something that isn't in the command list above. "
+                    "NEVER say you'll 'add a note' or 'remember' or 'update' anything — you can't. "
+                    "If you don't know what they want, just say so and show the commands."
+                ),
+            },
+            timeout=15,
+        )
+        data = resp.json()
+        reply = data.get("content", [{}])[0].get("text", "")
+        if reply:
+            await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text(
+                "I didn't catch that. Try /help for commands."
+            )
+    except Exception as e:
+        log.warning(f"Catchall Haiku failed: {e}")
+        await update.message.reply_text(
+            "I didn't catch that. Try /help for commands."
+        )
+
+
 async def _alert_operator(bot, message: str):
     """Send a crash/restart alert to the operator via Telegram."""
     if not _OPERATOR_CHAT_ID:
@@ -447,6 +513,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
     # --- Everything else: log, notify user, continue ---
     log.error(f"Unhandled exception: {err}", exc_info=err)
+
+    # Alert operator for non-transient errors
+    if context.bot and _OPERATOR_CHAT_ID:
+        user_info = ""
+        if isinstance(update, Update) and update.effective_user:
+            user_info = f"\nUser: {update.effective_user.id} ({update.effective_user.first_name})"
+        await _alert_operator(
+            context.bot,
+            f"Unhandled error: {type(err).__name__}: {err}{user_info}"
+        )
 
     if isinstance(update, Update) and update.effective_message:
         try:
@@ -527,21 +603,31 @@ def main():
     # CRITICAL: Clear any stale polling session before starting
     _clear_stale_session()
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    async def _post_init(application):
+        """Resume any saved prelim sessions after bot connects."""
+        if _RESTORED_COUNT > 0:
+            log.info(f"Resuming {_RESTORED_COUNT} saved prelim session(s)")
+            await resume_saved_sessions(application.bot)
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
 
     # Global error handler — exits on fatal errors, recovers from transient ones
     app.add_error_handler(error_handler)
 
     # Prelim conversation handler (must be added BEFORE simple command handlers)
-    from prelim_bot import get_prelim_handlers
+    from prelim_bot import get_prelim_handlers, cmd_defaults, resume_saved_sessions, _RESTORED_COUNT
     app.add_handler(get_prelim_handlers())
 
+    app.add_handler(CommandHandler("defaults", cmd_defaults))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("final", cmd_final))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+
+    # Catch-all: any text that isn't a command or part of a conversation
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_catchall))
 
     # Systemd watchdog — ping every 30s (service expects response within 120s)
     if app.job_queue is not None:
@@ -552,8 +638,9 @@ def main():
     # Notify systemd we're ready
     _notify_systemd_watchdog()
 
-    # Send startup alert to operator
-    if _OPERATOR_CHAT_ID:
+    # Startup alert — log only, don't spam Telegram
+    log.info(f"Bot ready at {datetime.now(timezone.utc).strftime('%m/%d %I:%M %p UTC')}")
+    if False and _OPERATOR_CHAT_ID:
         try:
             import asyncio as _aio
             async def _send_startup():
@@ -569,7 +656,11 @@ def main():
             log.warning(f"Could not send startup alert: {e}")
 
     log.info("Bot is running. Press Ctrl+C to stop.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=False,  # NEVER drop — messages sent during restart must be delivered
+        bootstrap_retries=-1,  # Infinite retries — keep trying until network comes back
+    )
 
 
 if __name__ == "__main__":
