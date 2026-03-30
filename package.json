@@ -11,5 +11,8 @@
     "@cloudflare/workers-types": "^4.20240909.0",
     "typescript": "^5.5.0",
     "wrangler": "^3.78.0"
+  },
+  "dependencies": {
+    "@jng/cf-chat-core": "file:../cf-chat-core"
   }
 }

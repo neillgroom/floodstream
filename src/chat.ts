@@ -1,10 +1,9 @@
 import type { Env, ChatRequest, ErrorResponse } from "./types";
-import { checkRateLimit } from "./rate-limit";
-import { loadConversation, saveConversation } from "./conversation";
+import { checkRateLimit, loadConversation, saveConversation, parseAnthropicLine, SourceTagStripper } from "@jng/cf-chat-core";
+import { CONFIG } from "./config";
 import { getSystemPrompt } from "./system-prompt";
 import { callAnthropicStream, calculateCost } from "./anthropic";
 import type { CallResult } from "./anthropic";
-import { parseAnthropicLine, SourceTagStripper } from "./stream-parser";
 import { parseSourceTag, detectTopics, logMessage, logKnowledgeGap } from "./analytics";
 
 function errorResponse(
@@ -47,7 +46,7 @@ export async function handleChat(
     request.headers.get("X-Forwarded-For") ||
     "unknown";
 
-  const rateCheck = await checkRateLimit(env, conversation_id, ip);
+  const rateCheck = await checkRateLimit(env.ECHO_RATE_LIMITS, CONFIG.rate_limits, conversation_id, ip, !!env.DISABLE_RATE_LIMIT);
   if (!rateCheck.allowed) {
     return errorResponse(
       429,
@@ -57,7 +56,7 @@ export async function handleChat(
   }
 
   // ── Load conversation history ──────────────────────────────────
-  const history = await loadConversation(env, conversation_id);
+  const history = await loadConversation(env.ECHO_CONVERSATIONS, conversation_id);
   history.push({ role: "user", content: message });
 
   // ── Call Anthropic (streaming) ─────────────────────────────────
@@ -190,7 +189,7 @@ export async function handleChat(
       const { sourceType, cleanResponse } = parseSourceTag(fullText);
 
       history.push({ role: "assistant", content: cleanResponse });
-      await saveConversation(env, conversation_id, history);
+      await saveConversation(env.ECHO_CONVERSATIONS, conversation_id, history);
 
       const result: CallResult = {
         text: cleanResponse,
