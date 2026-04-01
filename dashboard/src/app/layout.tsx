@@ -37,6 +37,7 @@ export default function RootLayout({
             <a href="/" className="text-zinc-400 hover:text-zinc-100 transition-colors">Claims</a>
             <a href="/import" className="text-zinc-400 hover:text-zinc-100 transition-colors">Import</a>
             <a href="/prelim" className="text-zinc-400 hover:text-zinc-100 transition-colors">New Prelim</a>
+            <a href="/diary" className="text-zinc-400 hover:text-zinc-100 transition-colors">Diary</a>
             <a href="/upload" className="text-zinc-400 hover:text-zinc-100 transition-colors">Upload Final</a>
           </nav>
         </header>

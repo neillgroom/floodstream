@@ -17,9 +17,22 @@ TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "assets", "fema_fillable
 
 
 def _format_date_display(date_str: str) -> str:
-    """Convert YYYYMMDD to MM/DD/YYYY."""
+    """Convert YYYYMMDD or YYYY-MM-DD to MM/DD/YYYY. Pass through if already formatted."""
+    if not date_str:
+        return ""
+    # Already in MM/DD/YYYY format
+    if "/" in date_str and len(date_str) >= 8:
+        return date_str
+    # YYYY-MM-DD format
+    if "-" in date_str and len(date_str) == 10:
+        parts = date_str.split("-")
+        return f"{parts[1]}/{parts[2]}/{parts[0]}"
+    # YYYYMMDD format (8 digits starting with 19 or 20)
     if len(date_str) == 8 and date_str.isdigit():
-        return f"{date_str[4:6]}/{date_str[6:8]}/{date_str[:4]}"
+        if date_str[:2] in ("19", "20"):
+            return f"{date_str[4:6]}/{date_str[6:8]}/{date_str[:4]}"
+        # MMDDYYYY format (doesn't start with 19/20)
+        return f"{date_str[:2]}/{date_str[2:4]}/{date_str[4:8]}"
     return date_str
 
 
@@ -187,7 +200,26 @@ def generate_fema_form(prelim: PrelimData, output_path: str, **kwargs):
             name = widget.field_name
             if name in fill_data:
                 widget.field_value = fill_data[name]
+                # Remove white background fill and border — prevents the field
+                # rect from painting over the form's grid lines between cells.
+                # Without this, the white fill bleeds past cell boundaries and
+                # obscures vertical divider lines (instant rejection tell).
+                widget.fill_color = None
+                widget.border_width = 0
                 widget.update()
+
+    # Page 2 fix: the template has "FCN: 0005070169" as one static text span
+    # starting at x=373. The FCN widget only starts at x=400, leaving the old
+    # Kanode FCN digits "000" visible from x=388 to x=400. Cover the leak with
+    # a white rect matching the template's field background.
+    if len(doc) > 1:
+        p2 = doc[1]
+        # Cover old FCN value that leaks before the widget rect
+        # "FCN: " label ends ~x=393, old value digits start there
+        p2.draw_rect(fitz.Rect(393, 143, 400, 154), color=None, fill=(1, 1, 1))
+        # Cover old "Date signed:" value similarly — old date starts ~x=519
+        # (widget starts at x=490 and covers it, but redraw for safety)
+        p2.draw_rect(fitz.Rect(519, 143, 490, 154), color=None, fill=(1, 1, 1))
 
     doc.save(output_path)
     doc.close()
